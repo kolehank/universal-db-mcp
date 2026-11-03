@@ -8,6 +8,7 @@ import type { DbAdapter, DbConfig, QueryResult, SchemaInfo, TableInfo, EnumValue
 import { validateQuery } from '../utils/safety.js';
 import { SchemaEnhancer, SchemaEnhancerConfig } from '../utils/schema-enhancer.js';
 import { DataMasker, createDataMasker } from '../utils/data-masking.js';
+import { AclError } from '../security/errors.js';
 
 /**
  * Schema 缓存配置
@@ -84,10 +85,19 @@ export class DatabaseService {
 
   /**
    * Execute a query with validation
+   * P1 错误分类（评审裁决 §4-10）：validateQuery 抛出的写权限拒绝包装为 AclError('PERMISSION_DENIED')，
+   * 供路由按 §6 错误码映射 403；P4b 的审计记录点本 phase 不实现。
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
     // Validate query safety
-    this.validateQuery(query);
+    try {
+      this.validateQuery(query);
+    } catch (error) {
+      throw new AclError(
+        'PERMISSION_DENIED',
+        error instanceof Error ? error.message : '操作被拒绝：当前权限不允许该操作'
+      );
+    }
 
     // Execute query
     const result = await this.adapter.executeQuery(query, params);

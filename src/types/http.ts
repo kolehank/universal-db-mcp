@@ -4,6 +4,8 @@
  */
 
 import type { DbConfig } from './adapter.js';
+import type { PermissionLevel } from '../security/datasource-registry.js';
+import type { AuditContext } from '../security/audit-context.js';
 
 /**
  * HTTP Server Configuration
@@ -60,10 +62,12 @@ export interface AppConfig {
 }
 
 /**
- * Connect Request
+ * Connect Request（§5.4：source 存在时忽略其余连接字段，required 由 ['type'] 改为 []）
  */
 export interface ConnectRequest {
-  type: string;
+  /** 注册表源名；存在时 body 其余连接字段被忽略 */
+  source?: string;
+  type?: string;
   host?: string;
   port?: number;
   user?: string;
@@ -72,6 +76,9 @@ export interface ConnectRequest {
   filePath?: string;
   authSource?: string;
   allowWrite?: boolean;
+  /** 权限声明（服务端权威，宽于生效权限时仅审计 permission_ignored，不参与授权） */
+  permissionMode?: string;
+  permissions?: string[];
   /** Oracle Instant Client 路径（启用 Thick 模式以支持 11g） */
   oracleClientPath?: string;
 }
@@ -188,6 +195,7 @@ export interface InfoResponse {
 
 /**
  * Session
+ * 鉴权/ACL 元数据（评审裁决 §4-9）：连接时由 connection-manager 写入，供审计与切源校验使用。
  */
 export interface Session {
   id: string;
@@ -195,6 +203,14 @@ export interface Session {
   config: DbConfig;
   createdAt: Date;
   lastAccessedAt: Date;
+  /** 审计主体：注册表模式为 apiKeys[].name；legacy 固定 'legacy' */
+  principal?: string;
+  /** sha256(key) 前 12 位，禁止明文 key */
+  keyFingerprint?: string;
+  /** 连接源名；adhoc 固定 'adhoc' */
+  source?: string;
+  /** §4.1 生效权限 min(sourceMax ?? safe, keyMax ?? full) */
+  effectivePermission?: PermissionLevel;
 }
 
 /**
@@ -216,4 +232,6 @@ export interface HttpQueryResult {
  */
 export interface AuthenticatedRequest {
   apiKey?: string;
+  /** 鉴权通过后由 auth 中间件挂载的审计上下文（routes 经 auditScope 进入其作用域） */
+  auditCtx?: AuditContext;
 }

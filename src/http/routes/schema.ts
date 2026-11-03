@@ -1,6 +1,9 @@
 /**
  * Schema Routes
  * Database schema and table information endpoints
+ *
+ * P1（评审裁决 §4-6/10）：7 处 catch 按 error.code 映射 —— PERMISSION_DENIED → 403 + 审计 denied，
+ * 其余保持既有 500 语义（各 fallback 换码不变）。
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -8,6 +11,11 @@ import type { TablesResponse, ApiResponse } from '../../types/http.js';
 import type { SchemaInfo, TableInfo, EnumValuesResult, SampleDataResult } from '../../types/adapter.js';
 import { ConnectionManager } from '../../core/connection-manager.js';
 import type { SchemaCacheStats } from '../../core/database-service.js';
+import { auditScope } from '../middleware/index.js';
+import type { RouteRuntime } from './runtime.js';
+import { getAuditContext } from '../../security/audit-context.js';
+import { auditDenied } from '../audit.js';
+import { classifyError } from '../../security/errors.js';
 
 /**
  * Schema 响应（包含缓存信息）
@@ -31,7 +39,8 @@ interface CacheStatusResponse {
 
 export async function setupSchemaRoutes(
   fastify: FastifyInstance,
-  connectionManager: ConnectionManager
+  connectionManager: ConnectionManager,
+  runtime: RouteRuntime = {}
 ): Promise<void> {
   /**
    * GET /api/tables
@@ -52,38 +61,31 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId, forceRefresh } = request.query;
-      const shouldRefresh = forceRefresh === 'true';
+    return auditScope<ApiResponse<TablesResponse>>(request, async () => {
+      try {
+        const { sessionId, forceRefresh } = request.query;
+        const shouldRefresh = forceRefresh === 'true';
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
+        rebindSessionSource(connectionManager, sessionId);
 
-      // List tables
-      const tables = await service.listTables(shouldRefresh);
+        // Get database service
+        const service = connectionManager.getService(sessionId);
 
-      return {
-        success: true,
-        data: { tables },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'LIST_TABLES_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to list tables',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // List tables
+        const tables = await service.listTables(shouldRefresh);
+
+        return {
+          success: true,
+          data: { tables },
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'LIST_TABLES_FAILED', 'Failed to list tables', request.id);
+      }
+    });
   });
 
   /**
@@ -105,49 +107,42 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId, forceRefresh } = request.query;
-      const shouldRefresh = forceRefresh === 'true';
+    return auditScope<ApiResponse<SchemaWithCacheInfo>>(request, async () => {
+      try {
+        const { sessionId, forceRefresh } = request.query;
+        const shouldRefresh = forceRefresh === 'true';
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
+        rebindSessionSource(connectionManager, sessionId);
 
-      // Get schema
-      const schema = await service.getSchema(shouldRefresh);
+        // Get database service
+        const service = connectionManager.getService(sessionId);
 
-      // Add cache info
-      const cacheStats = service.getCacheStats();
-      const response: SchemaWithCacheInfo = {
-        ...schema,
-        _cacheInfo: {
-          cached: cacheStats.isCached,
-          cachedAt: cacheStats.cachedAt?.toISOString(),
-          hitRate: service.getCacheHitRate() + '%',
-        },
-      };
+        // Get schema
+        const schema = await service.getSchema(shouldRefresh);
 
-      return {
-        success: true,
-        data: response,
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'GET_SCHEMA_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to get schema',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Add cache info
+        const cacheStats = service.getCacheStats();
+        const response: SchemaWithCacheInfo = {
+          ...schema,
+          _cacheInfo: {
+            cached: cacheStats.isCached,
+            cachedAt: cacheStats.cachedAt?.toISOString(),
+            hitRate: service.getCacheHitRate() + '%',
+          },
+        };
+
+        return {
+          success: true,
+          data: response,
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'GET_SCHEMA_FAILED', 'Failed to get schema', request.id);
+      }
+    });
   });
 
   /**
@@ -176,39 +171,32 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { table } = request.params;
-      const { sessionId, forceRefresh } = request.query;
-      const shouldRefresh = forceRefresh === 'true';
+    return auditScope<ApiResponse<TableInfo>>(request, async () => {
+      try {
+        const { table } = request.params;
+        const { sessionId, forceRefresh } = request.query;
+        const shouldRefresh = forceRefresh === 'true';
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
+        rebindSessionSource(connectionManager, sessionId);
 
-      // Get table info
-      const tableInfo = await service.getTableInfo(table, shouldRefresh);
+        // Get database service
+        const service = connectionManager.getService(sessionId);
 
-      return {
-        success: true,
-        data: tableInfo,
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'GET_TABLE_INFO_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to get table information',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Get table info
+        const tableInfo = await service.getTableInfo(table, shouldRefresh);
+
+        return {
+          success: true,
+          data: tableInfo,
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'GET_TABLE_INFO_FAILED', 'Failed to get table information', request.id);
+      }
+    });
   });
 
   /**
@@ -229,38 +217,31 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId } = request.query;
+    return auditScope<ApiResponse<{ cleared: boolean; message: string }>>(request, async () => {
+      try {
+        const { sessionId } = request.query;
 
-      // Get database service and clear cache
-      const service = connectionManager.getService(sessionId);
-      service.clearSchemaCache();
+        rebindSessionSource(connectionManager, sessionId);
 
-      return {
-        success: true,
-        data: {
-          cleared: true,
-          message: 'Schema 缓存已清除',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'CLEAR_CACHE_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to clear cache',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Get database service and clear cache
+        const service = connectionManager.getService(sessionId);
+        service.clearSchemaCache();
+
+        return {
+          success: true,
+          data: {
+            cleared: true,
+            message: 'Schema 缓存已清除',
+          },
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'CLEAR_CACHE_FAILED', 'Failed to clear cache', request.id);
+      }
+    });
   });
 
   /**
@@ -281,39 +262,32 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId } = request.query;
+    return auditScope<ApiResponse<CacheStatusResponse>>(request, async () => {
+      try {
+        const { sessionId } = request.query;
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
-      const cacheStats = service.getCacheStats();
+        rebindSessionSource(connectionManager, sessionId);
 
-      return {
-        success: true,
-        data: {
-          sessionId,
-          cache: cacheStats,
-          hitRate: service.getCacheHitRate() + '%',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'GET_CACHE_STATUS_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to get cache status',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Get database service
+        const service = connectionManager.getService(sessionId);
+        const cacheStats = service.getCacheStats();
+
+        return {
+          success: true,
+          data: {
+            sessionId,
+            cache: cacheStats,
+            hitRate: service.getCacheHitRate() + '%',
+          },
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'GET_CACHE_STATUS_FAILED', 'Failed to get cache status', request.id);
+      }
+    });
   });
 
   /**
@@ -344,44 +318,37 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId, tableName, columnName, limit, includeCount } = request.query;
-      const limitNum = limit ? parseInt(limit, 10) : undefined;
-      const shouldIncludeCount = includeCount === 'true';
+    return auditScope<ApiResponse<EnumValuesResult>>(request, async () => {
+      try {
+        const { sessionId, tableName, columnName, limit, includeCount } = request.query;
+        const limitNum = limit ? parseInt(limit, 10) : undefined;
+        const shouldIncludeCount = includeCount === 'true';
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
+        rebindSessionSource(connectionManager, sessionId);
 
-      // Get enum values
-      const result = await service.getEnumValues(
-        tableName,
-        columnName,
-        limitNum,
-        shouldIncludeCount
-      );
+        // Get database service
+        const service = connectionManager.getService(sessionId);
 
-      return {
-        success: true,
-        data: result,
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'GET_ENUM_VALUES_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to get enum values',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Get enum values
+        const result = await service.getEnumValues(
+          tableName,
+          columnName,
+          limitNum,
+          shouldIncludeCount
+        );
+
+        return {
+          success: true,
+          data: result,
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'GET_ENUM_VALUES_FAILED', 'Failed to get enum values', request.id);
+      }
+    });
   });
 
   /**
@@ -410,42 +377,71 @@ export async function setupSchemaRoutes(
       },
     },
   }, async (request, reply) => {
-    try {
-      const { sessionId, tableName, columns, limit } = request.query;
-      const limitNum = limit ? parseInt(limit, 10) : undefined;
-      const columnList = columns ? columns.split(',').map(c => c.trim()) : undefined;
+    return auditScope<ApiResponse<SampleDataResult>>(request, async () => {
+      try {
+        const { sessionId, tableName, columns, limit } = request.query;
+        const limitNum = limit ? parseInt(limit, 10) : undefined;
+        const columnList = columns ? columns.split(',').map(c => c.trim()) : undefined;
 
-      // Get database service
-      const service = connectionManager.getService(sessionId);
+        rebindSessionSource(connectionManager, sessionId);
 
-      // Get sample data
-      const result = await service.getSampleData(
-        tableName,
-        columnList,
-        limitNum
-      );
+        // Get database service
+        const service = connectionManager.getService(sessionId);
 
-      return {
-        success: true,
-        data: result,
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        error: {
-          code: 'GET_SAMPLE_DATA_FAILED',
-          message: error instanceof Error ? error.message : 'Failed to get sample data',
-        },
-        metadata: {
-          timestamp: new Date().toISOString(),
-          requestId: request.id,
-        },
-      };
-    }
+        // Get sample data
+        const result = await service.getSampleData(
+          tableName,
+          columnList,
+          limitNum
+        );
+
+        return {
+          success: true,
+          data: result,
+          metadata: {
+            timestamp: new Date().toISOString(),
+            requestId: request.id,
+          },
+        };
+      } catch (error) {
+        return sendSchemaError(reply, error, runtime, 'GET_SAMPLE_DATA_FAILED', 'Failed to get sample data', request.id);
+      }
+    });
   });
+}
+
+/** 会话 source 回绑审计上下文（§8.1「切源后不得沿用旧值」） */
+function rebindSessionSource(connectionManager: ConnectionManager, sessionId: string): void {
+  const session = connectionManager.getSession(sessionId);
+  const ctx = getAuditContext();
+  if (ctx && session?.source) {
+    ctx.source = session.source;
+  }
+}
+
+/** 统一错误响应：PERMISSION_DENIED → 403 + 审计；其余回落到各 fallback 码（500） */
+function sendSchemaError<T>(
+  reply: any,
+  error: unknown,
+  runtime: RouteRuntime,
+  fallbackCode: string,
+  fallbackMessage: string,
+  requestId: string
+): ApiResponse<T> {
+  const { statusCode, code, message } = classifyError(error, fallbackCode);
+  if (code === 'PERMISSION_DENIED') {
+    auditDenied(runtime.auditLogger, code);
+  }
+  reply.code(statusCode);
+  return {
+    success: false,
+    error: {
+      code,
+      message: code === fallbackCode ? (error instanceof Error ? error.message : fallbackMessage) : message,
+    },
+    metadata: {
+      timestamp: new Date().toISOString(),
+      requestId,
+    },
+  };
 }
