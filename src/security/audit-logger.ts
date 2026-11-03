@@ -51,6 +51,18 @@ export interface AuditRecord {
   errorCode?: string | null;
   rows?: number;
   durationMs?: number;
+  /**
+   * 以下字段为 P6 新增的可选扩展（对既有事件零影响——仅当调用方显式提供时才出现在序列化输出中）：
+   * - session_revoked：reason（吊销原因，与 errorCode 同源，native 承载）+ sessionId（被吊销会话）；
+   * - config_reload：configSha256（配置文件 sha256） + sourceCount/keyCount/closedSessions（统计）。
+   * P5 目前经 rows/sql(JSON)/errorCode 映射承载；本字段供后续 emitter 直接使用，未提供时均为 undefined 省略。
+   */
+  sessionId?: string;
+  reason?: string;
+  configSha256?: string;
+  sourceCount?: number;
+  keyCount?: number;
+  closedSessions?: number;
 }
 
 export interface AuditLoggerOptions {
@@ -156,6 +168,12 @@ export class AuditLogger {
       errorCode: entry.errorCode,
       rows: entry.rows,
       durationMs: entry.durationMs,
+      sessionId: entry.sessionId,
+      reason: entry.reason,
+      configSha256: entry.configSha256,
+      sourceCount: entry.sourceCount,
+      keyCount: entry.keyCount,
+      closedSessions: entry.closedSessions,
     };
     return JSON.stringify(record);
   }

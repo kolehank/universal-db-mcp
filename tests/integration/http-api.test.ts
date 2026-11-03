@@ -131,12 +131,19 @@ describe('HTTP API Integration Tests', () => {
   });
 
   describe('CORS', () => {
-    it('should include CORS headers', async () => {
+    it('should handle CORS preflight with origin headers', async () => {
+      // @fastify/cors v9 对无 Origin 的预检返回 400（测试过时而非服务端缺陷）。
+      // 浏览器真实预检必带 origin + access-control-request-method，返回 204。
       const response = await server.inject({
         method: 'OPTIONS',
-        url: '/api/health'
+        url: '/api/health',
+        headers: {
+          origin: 'http://localhost',
+          'access-control-request-method': 'POST'
+        }
       });
 
+      expect(response.statusCode).toBe(204);
       expect(response.headers['access-control-allow-origin']).toBeDefined();
       expect(response.headers['access-control-allow-methods']).toBeDefined();
     });
