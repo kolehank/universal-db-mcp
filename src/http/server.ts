@@ -88,7 +88,13 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
     origin: config.http?.cors.origins || '*',
     credentials: config.http?.cors.credentials || false,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID'],
+    allowedHeaders: [
+      'Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID',
+      // 3.0：Streamable HTTP / SSE 的数据库源与审计归因头（评审裁决 §4-8）：
+      'X-DB-Source', 'X-DB-Type', 'X-DB-Host', 'X-DB-Port', 'X-DB-User', 'X-DB-Password',
+      'X-DB-Database', 'X-DB-FilePath', 'X-DB-Allow-Write', 'X-DB-Permission-Mode',
+      'X-DB-Permissions', 'X-DB-Oracle-Client-Path', 'X-Audit-User',
+    ],
   });
 
   // Setup rate limiting
@@ -112,10 +118,11 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
     }),
   });
 
-  // Setup authentication middleware（P1：注册表模式 fail-closed 鉴权 + 挂载 AuditContext）
-  // P5：auth 经 registryView 读到当前实例（重载后新 key 立即生效 / 已删 key 立即失效）
+  // Setup authentication middleware（P1：注册表模式 fail-closed 鉴权 + 挂载 AuditContext；
+  // P5：auth 经 registryView 读到当前实例（重载后新 key 立即生效 / 已删 key 立即失效）；
+  // P6 收尾：TRUST_AUDIT_USER_HEADER=true 时读 X-Audit-User 头（仅审计关联，不参与授权））
   fastify.addHook('onRequest', async (request, reply) => {
-    await authMiddleware(request, reply, config, { registry: registryView });
+    await authMiddleware(request, reply, config, { registry: registryView, trustAuditUserHeader: securityEnv.trustAuditUserHeader });
   });
 
   // Create connection manager（注入 mock adapter factory / 审计日志器）

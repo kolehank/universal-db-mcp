@@ -604,6 +604,7 @@ export class DatabaseService {
       keyFingerprint: ctx.keyFingerprint,
       source: ctx.source || undefined,
       clientIp: ctx.clientIp,
+      auditUser: ctx.auditUser, // 仅 TRUST_AUDIT_USER_HEADER=true 时由 auth 注入；logger 在 false 时丢弃
       status: 'ok',
       ...entry,
     });

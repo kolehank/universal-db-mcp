@@ -114,7 +114,7 @@ async function makeServer(
   const dir = makeTmpDir();
   const auditPath = join(dir, 'audit.ndjson');
   const registry = buildRegistryFromRaw(registryRaw, 'acl-http-test');
-  const auditLogger = new AuditLogger({ auditLogPath: auditPath });
+  const auditLogger = new AuditLogger({ auditLogPath: auditPath, trustAuditUserHeader: securityEnv.trustAuditUserHeader === true });
   const server = await createHttpServer(baseConfig(), {
     registry,
     adapterFactory,
@@ -488,6 +488,69 @@ describe('P4b 用例 22：AUDIT_LOG_PATH 落盘 §8.2 完整字段，写拒绝�
       expect(denied[0].errorCode).toBe('PERMISSION_DENIED');
       expect(denied[0].source).toBe('ok-ro');
       expect(denied[0].principal).toBe('k-ro');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('P6 收尾：X-Audit-User 审计关联与 CORS 新头放行', () => {
+  it('TRUST_AUDIT_USER_HEADER=true 时 X-Audit-User 记入审计 auditUser（仅审计关联）', async () => {
+    const { server, auditPath } = await makeServer(defaultRegistryRaw(), okAdapterFactory(), {
+      trustAuditUserHeader: true,
+    });
+    try {
+      const conn = await server.inject({
+        method: 'POST',
+        url: '/api/connect',
+        headers: { 'X-API-Key': 'test-key-ro', 'X-Audit-User': 'zhangsan' },
+        payload: { source: 'ok-ro' },
+      });
+      expect(conn.statusCode).toBe(200);
+      const lines = readAudit(auditPath);
+      const connectLines = lines.filter((l) => l.event === 'connect');
+      expect(connectLines.length).toBeGreaterThan(0);
+      expect(connectLines[0].auditUser).toBe('zhangsan');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('默认（false）时即使客户端带 X-Audit-User 也不写 auditUser 字段', async () => {
+    const { server, auditPath } = await makeServer(defaultRegistryRaw(), okAdapterFactory());
+    try {
+      const conn = await server.inject({
+        method: 'POST',
+        url: '/api/connect',
+        headers: { 'X-API-Key': 'test-key-ro', 'X-Audit-User': 'lisi' },
+        payload: { source: 'ok-ro' },
+      });
+      expect(conn.statusCode).toBe(200);
+      const lines = readAudit(auditPath);
+      for (const l of lines) {
+        expect(Object.prototype.hasOwnProperty.call(l, 'auditUser')).toBe(false);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('CORS 预检（带 origin）放行 X-DB-Source / X-Audit-User 头', async () => {
+    const { server } = await makeServer(defaultRegistryRaw(), okAdapterFactory());
+    try {
+      const preflight = await server.inject({
+        method: 'OPTIONS',
+        url: '/mcp',
+        headers: {
+          origin: 'http://localhost:3000',
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'x-db-source, x-audit-user',
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+      const allow = (preflight.headers['access-control-allow-headers'] as string) || '';
+      expect(allow.toLowerCase()).toContain('x-db-source');
+      expect(allow.toLowerCase()).toContain('x-audit-user');
     } finally {
       await server.close();
     }

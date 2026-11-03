@@ -31,6 +31,7 @@ export function auditDenied(logger: AuditLogger | undefined, errorCode: string, 
     keyFingerprint: ctx.keyFingerprint,
     source: ctx.source || undefined,
     clientIp: ctx.clientIp,
+    auditUser: ctx.auditUser, // 仅 TRUST_AUDIT_USER_HEADER=true 时由 auth 注入；logger 在 false 时丢弃
     status: 'denied',
     errorCode,
   });
@@ -53,6 +54,7 @@ export function auditPermissionIgnored(logger: AuditLogger | undefined, source: 
     keyFingerprint: ctx.keyFingerprint,
     source: source || ctx.source || undefined,
     clientIp: ctx.clientIp,
+    auditUser: ctx.auditUser, // 仅 TRUST_AUDIT_USER_HEADER=true 时由 auth 注入；logger 在 false 时丢弃
     status: 'ignored',
     errorCode: null,
   });

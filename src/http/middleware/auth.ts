@@ -25,6 +25,8 @@ import type { DatasourceRegistry } from '../../security/datasource-registry.js';
 export interface AuthMiddlewareOptions {
   /** 注册表实例；null/缺失 = legacy 模式（走 API_KEYS env 逻辑） */
   registry?: DatasourceRegistry | null;
+  /** TRUST_AUDIT_USER_HEADER=true 时读取 X-Audit-User 头记入 ctx.auditUser（仅审计关联，不参与授权；默认 false 不读） */
+  trustAuditUserHeader?: boolean;
 }
 
 /** 构造 + 校验 API key；通过则挂载审计上下文并返回它，否则直接发 401/403 并返回 undefined */
@@ -75,7 +77,8 @@ export async function authMiddleware(
       });
       return undefined;
     }
-    return mountContext(request, apiKey, keyDef.name, keyFingerprint(apiKey));
+    return mountContext(request, apiKey, keyDef.name, keyFingerprint(apiKey),
+      options.trustAuditUserHeader ? auditUserFromHeader(request) : undefined);
   }
 
   // ---- legacy 模式（无注册表）：保持现有行为 ----
@@ -118,7 +121,8 @@ export async function authMiddleware(
   }
 
   // Store API key in request for later use（legacy principal 固定 'legacy'，评审裁决 §4-7）
-  return mountContext(request, apiKey, 'legacy', keyFingerprint(apiKey));
+  return mountContext(request, apiKey, 'legacy', keyFingerprint(apiKey),
+    options.trustAuditUserHeader ? auditUserFromHeader(request) : undefined);
 }
 
 /**
@@ -144,11 +148,19 @@ function extractApiKey(request: FastifyRequest): string | null {
   );
 }
 
+function auditUserFromHeader(request: FastifyRequest): string | undefined {
+  const value = request.headers['x-audit-user'];
+  const raw = Array.isArray(value) ? value[0] : value;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function mountContext(
   request: FastifyRequest,
   apiKey: string,
   principal: string,
-  fingerprint: string
+  fingerprint: string,
+  auditUser?: string
 ): AuditContext {
   (request as any).apiKey = apiKey;
   const ctx: AuditContext = {
@@ -160,6 +172,9 @@ function mountContext(
     source: '',
     clientIp: request.ip,
   };
+  if (auditUser) {
+    ctx.auditUser = auditUser;
+  }
   (request as { auditCtx?: AuditContext }).auditCtx = ctx;
   return ctx;
 }
