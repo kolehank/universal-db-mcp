@@ -1,0 +1,60 @@
+{
+  "$schemaVersion": 1,
+  "allowAdhocConnections": false,
+  "adhocTargetAllowlist": [],
+  "apiKeys": [
+    {
+      "key": "${ENV:KEY_OCTOP_FIN}",
+      "name": "octop/财务分析",
+      "allowedSources": ["finance-ro"],
+      "maxPermission": "safe"
+    },
+    {
+      "key": "${ENV:KEY_OCTOP_OPS}",
+      "name": "octop/运维助手",
+      "allowedSources": ["ops-ro"],
+      "maxPermission": "safe"
+    },
+    {
+      "key": "${ENV:KEY_OCTOP_HR}",
+      "name": "octop/人事查询",
+      "allowedSources": ["hr-ro"],
+      "maxPermission": "safe"
+    }
+  ],
+  "sources": [
+    {
+      "name": "finance-ro",
+      "description": "财务库只读（生产副本）",
+      "type": "mysql",
+      "host": "${ENV:FIN_HOST}",
+      "port": 3306,
+      "user": "${ENV:FIN_USER}",
+      "password": "${ENV:FIN_PWD}",
+      "database": "finance",
+      "maxPermission": "safe"
+    },
+    {
+      "name": "ops-ro",
+      "description": "运维库只读",
+      "type": "postgres",
+      "host": "${ENV:OPS_HOST}",
+      "port": 5432,
+      "user": "${ENV:OPS_USER}",
+      "password": "${ENV:OPS_PWD}",
+      "database": "ops",
+      "maxPermission": "safe"
+    },
+    {
+      "name": "hr-ro",
+      "description": "人事库只读",
+      "type": "mysql",
+      "host": "${ENV:HR_HOST}",
+      "port": 3306,
+      "user": "${ENV:HR_USER}",
+      "password": "${ENV:HR_PWD}",
+      "database": "hr",
+      "maxPermission": "safe"
+    }
+  ]
+}

@@ -302,6 +302,14 @@ npx universal-db-mcp --type mysql --permission-mode full ...
 - Connect through VPN or bastion hosts
 - Regularly audit query logs
 
+### Data Source Registry & Per-Source ACL (3.0+)
+
+Since 3.0, database connection parameters are **no longer passed by clients**. Instead, sources are pre-registered in a server-side registry file, each API key is limited to an allowlist of sources (`allowedSources`), the server is the authority on effective permissions, every query/connection/denial is written to structured NDJSON audit logs, and the registry hot-reloads on `SIGHUP` for zero-downtime changes.
+
+- 📖 Full ops manual: [Datasource ACL & Registry](./docs/guides/datasource-acl.md)
+- ⬆️ Upgrade from 2.x: [MIGRATION-3.0.md](./MIGRATION-3.0.md)
+- ⚠️ **Breaking change in 3.0**: the HTTP raw-parameter channel (`X-DB-Type`/`X-DB-Host`/... headers, `/sse?...` URL parameters, `/api/connect` body params) is **disabled by default**. HTTP mode refuses to start when `DATASOURCE_CONFIG` is unset, unless `ALLOW_ADHOC_CONNECTIONS=true` is set explicitly.
+
 ## 🔌 Supported Platforms
 
 Universal DB MCP works with any platform that supports the MCP protocol or REST API. Here's a comprehensive list:

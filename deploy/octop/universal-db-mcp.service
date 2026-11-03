@@ -1,0 +1,38 @@
+# ============================================================
+# universal-db-mcp · Octop 同机部署（宿主进程 + HTTP loopback）
+# 放置：/etc/systemd/system/universal-db-mcp.service
+# 启用：systemctl daemon-reload && systemctl enable --now universal-db-mcp
+# 热加载：改 registry.json 后  kill -HUP $(systemctl show -p MainPID --value universal-db-mcp)
+# ============================================================
+
+[Unit]
+Description=Universal DB MCP (HTTP, Octop loopback topology)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dbmcp
+Group=dbmcp
+WorkingDirectory=/opt/universal-db-mcp
+EnvironmentFile=/etc/universal-db-mcp/env
+ExecStart=/usr/bin/node dist/index.js
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# --- 安全加固 ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ReadWritePaths=/var/log/universal-db-mcp
+
+# --- 出站限制（可选）：只允许连数据库网段 ---
+# IPAddressAllow=10.0.3.0/24
+# IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
