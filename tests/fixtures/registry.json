@@ -1,0 +1,42 @@
+{
+  "$schemaVersion": 1,
+  "allowAdhocConnections": false,
+  "adhocTargetAllowlist": [],
+  "apiKeys": [
+    {
+      "key": "test-key-full",
+      "name": "k-full",
+      "allowedSources": ["ok-ro", "ok-rw"],
+      "maxPermission": "full"
+    },
+    {
+      "key": "test-key-ro",
+      "name": "k-ro",
+      "allowedSources": ["ok-ro"]
+    }
+  ],
+  "sources": [
+    {
+      "name": "ok-ro",
+      "description": "只读测试源",
+      "type": "mysql",
+      "host": "10.1.2.3",
+      "port": 3306,
+      "user": "test-user",
+      "password": "test-pass",
+      "database": "testdb",
+      "maxPermission": "safe"
+    },
+    {
+      "name": "ok-rw",
+      "description": "可写测试源",
+      "type": "mysql",
+      "host": "10.1.2.4",
+      "port": 3306,
+      "user": "test-user",
+      "password": "test-pass",
+      "database": "testdb",
+      "maxPermission": "readwrite"
+    }
+  ]
+}
