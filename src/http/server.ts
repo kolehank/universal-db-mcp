@@ -117,8 +117,8 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
   // Store connection manager in fastify instance for access in routes
   fastify.decorate('connectionManager', connectionManager);
 
-  // Setup routes（注入注册表 / 审计日志器 / 安全环境变量）
-  await setupRoutes(fastify, connectionManager, { registry, auditLogger, securityEnv });
+  // Setup routes（注入注册表 / 审计日志器 / 安全环境变量 / 适配器工厂）
+  await setupRoutes(fastify, connectionManager, { registry, auditLogger, securityEnv, adapterFactory: options.adapterFactory });
 
   // Setup error handler
   setupErrorHandler(fastify);

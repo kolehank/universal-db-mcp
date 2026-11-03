@@ -24,7 +24,8 @@ export async function setupRoutes(
   await setupHealthRoutes(fastify);
 
   // MCP SSE routes (no auth required, uses its own session management)
-  await setupMcpSseRoutes(fastify);
+  // P2：注入 runtime（registry/auditLogger/adapterFactory/securityEnv）——不注入则 MCP 路由以 legacy 空配置运行，ACL 全失效
+  await setupMcpSseRoutes(fastify, runtime);
 
   // Connection routes
   await setupConnectionRoutes(fastify, connectionManager, runtime);

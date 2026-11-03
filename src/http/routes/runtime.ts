@@ -6,6 +6,7 @@
 import type { DatasourceRegistry } from '../../security/datasource-registry.js';
 import type { AuditLogger } from '../../security/audit-logger.js';
 import type { SecurityEnvConfig } from '../../utils/config-loader.js';
+import type { DbAdapter, DbConfig } from '../../types/adapter.js';
 
 export interface RouteRuntime {
   /** 注册表实例；null = legacy 模式 */
@@ -14,4 +15,6 @@ export interface RouteRuntime {
   auditLogger?: AuditLogger;
   /** §3.1 安全相关环境变量（adhoc 开关/目标白名单/审计文件名/信任审计用户头） */
   securityEnv?: SecurityEnvConfig;
+  /** 适配器工厂（测试注入 mock；缺省用 createAdapter） */
+  adapterFactory?: (config: DbConfig) => DbAdapter;
 }
