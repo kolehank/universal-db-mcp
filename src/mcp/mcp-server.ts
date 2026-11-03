@@ -37,7 +37,8 @@ import { isAdhocAllowed, resolveEffectivePermission } from '../security/datasour
 import type { ApiKeyDef, DatasourceDef, DatasourceRegistry, PermissionLevel } from '../security/datasource-registry.js';
 import type { AuditContext } from '../security/audit-context.js';
 import { getAuditContext, runWithAuditContext } from '../security/audit-context.js';
-import type { AuditLogger, AuditRecord } from '../security/audit-logger.js';
+import { AuditLogger } from '../security/audit-logger.js';
+import type { AuditRecord } from '../security/audit-logger.js';
 import { auditDenied } from '../http/audit.js';
 import { AclError } from '../security/errors.js';
 
@@ -119,6 +120,10 @@ export class DatabaseMCPServer {
     this.config = config || null;
     this.cacheConfig = options.cacheConfig || {};
     this.opts = { ...options };
+    // P4b stdio/远程通用接线：调用方未显式注入 auditLogger 时，按 §3.1 从 AUDIT_LOG_PATH 进程环境构造。
+    // Best-effort：该 logger 只写文件/stderr（构造 WARN 走 stderr），未配置则禁用态 no-op，绝不写 stdout
+    // （stdio 模式以此满足 §8.2「审计只写 AUDIT_LOG_PATH 文件或 stderr」）。
+    this.opts.auditLogger = options.auditLogger ?? new AuditLogger({ auditLogPath: process.env.AUDIT_LOG_PATH });
     this.currentSource = options.source ?? null;
     this.currentEffectivePermission = options.effectivePermission;
     this.server = new Server(
@@ -306,10 +311,8 @@ export class DatabaseMCPServer {
 
           console.error(`📊 执行查询: ${query.substring(0, 100)}...`);
 
-          // 写权限拒绝 → AclError(PERMISSION_DENIED)（safety.ts 未改，database-service 已包装）
+          // §8.2：execute_query 的 query/metadata 审计由 DatabaseService 记录点统一写（sql/sqlBytes/sqlTruncated/rows/durationMs）
           const result = await this.databaseService.executeQuery(query, params);
-
-          // P4b：此处补 event=query 审计（sql/sqlBytes/sqlTruncated/rows/durationMs），source 已由 withCallContext 重绑
           return {
             content: [
               {
@@ -325,9 +328,9 @@ export class DatabaseMCPServer {
 
           console.error('📋 获取数据库结构...');
 
+          // §8.2：get_schema/get_table_info 的 metadata 审计由 DatabaseService 记录点统一写（耗时 + status）
           const schema = await this.databaseService.getSchema(forceRefresh);
 
-          // P4b：此处补 event=metadata 审计（耗时）
           const cacheStats = this.databaseService.getCacheStats();
           const response = {
             ...schema,
@@ -353,9 +356,8 @@ export class DatabaseMCPServer {
 
           console.error(`📄 获取表信息: ${tableName}`);
 
+          // §8.2：get_table_info 的 metadata 审计由 DatabaseService 记录点统一写（耗时 + status）
           const table = await this.databaseService.getTableInfo(tableName, forceRefresh);
-
-          // P4b：此处补 event=metadata 审计（耗时）
           return {
             content: [
               {
@@ -394,14 +396,13 @@ export class DatabaseMCPServer {
 
           console.error(`🔢 获取枚举值: ${tableName}.${columnName}`);
 
+          // §8.2：get_enum_values 内部查询的 query 审计由 DatabaseService 记录点统一写
           const result = await this.databaseService.getEnumValues(
             tableName,
             columnName,
             limit,
             includeCount
           );
-
-          // P4b：此处补 event=query 审计（耗时）
           return {
             content: [
               {
@@ -421,13 +422,12 @@ export class DatabaseMCPServer {
 
           console.error(`📝 获取示例数据: ${tableName}`);
 
+          // §8.2：get_sample_data 内部查询的 query 审计由 DatabaseService 记录点统一写
           const result = await this.databaseService.getSampleData(
             tableName,
             columns,
             limit
           );
-
-          // P4b：此处补 event=query 审计（耗时）
           return {
             content: [
               {
@@ -442,9 +442,10 @@ export class DatabaseMCPServer {
           throw new Error(`未知工具: ${name}`);
       }
     } catch (error) {
-      // §6：ACL 拒绝类（AclError）→ [<CODE>] 中文说明 + isError + denied 审计；其余保持既有文本
+      // §6：ACL 拒绝类（AclError）→ [<CODE>] 中文说明 + isError；其余保持既有文本。
+      // denied 审计已在源头记录：PERMISSION_DENIED 由 DatabaseService.executeQuery 记 event=denied
+      // （§8.2 记录点全覆盖后此处不再重复写，避免同一次拒绝产生多行 denied）。
       if (error instanceof AclError) {
-        auditDenied(this.opts.auditLogger, error.code);
         const errorMessage = error.message;
         console.error(`❌ 错误: ${errorMessage}`);
         return toolError(error.code, errorMessage);
@@ -523,7 +524,7 @@ export class DatabaseMCPServer {
 
     this.adapter = newAdapter;
     this.config = newConfig;
-    this.databaseService = new DatabaseService(newAdapter, newConfig, this.cacheConfig);
+    this.databaseService = new DatabaseService(newAdapter, newConfig, this.cacheConfig, undefined, this.opts.auditLogger);
     this.currentSource = 'adhoc';
 
     const connInfo = newConfig.type === 'sqlite'
@@ -618,7 +619,7 @@ export class DatabaseMCPServer {
 
     this.adapter = newAdapter;
     this.config = newConfig;
-    this.databaseService = new DatabaseService(newAdapter, newConfig, this.cacheConfig);
+    this.databaseService = new DatabaseService(newAdapter, newConfig, this.cacheConfig, undefined, this.opts.auditLogger);
     this.currentSource = source;
     this.currentEffectivePermission = effective;
 
@@ -758,7 +759,7 @@ export class DatabaseMCPServer {
   setAdapter(adapter: DbAdapter): void {
     this.adapter = adapter;
     if (this.config) {
-      this.databaseService = new DatabaseService(adapter, this.config, this.cacheConfig);
+      this.databaseService = new DatabaseService(adapter, this.config, this.cacheConfig, undefined, this.opts.auditLogger);
     }
   }
 

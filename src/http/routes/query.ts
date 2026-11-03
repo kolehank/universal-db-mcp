@@ -14,13 +14,14 @@ import { ConnectionManager } from '../../core/connection-manager.js';
 import { auditScope } from '../middleware/index.js';
 import type { RouteRuntime } from './runtime.js';
 import { getAuditContext } from '../../security/audit-context.js';
-import { auditDenied } from '../audit.js';
 import { classifyError } from '../../security/errors.js';
 
 export async function setupQueryRoutes(
   fastify: FastifyInstance,
   connectionManager: ConnectionManager,
-  runtime: RouteRuntime = {}
+  // P4b：查询失败/拒绝的审计已在 DatabaseService 记录点统一写，路由层不再需要 runtime；
+  // 参数保留以与 setupRoutes 的调用形参对齐（_runtime 避免 noUnusedParameters）
+  _runtime: RouteRuntime = {}
 ): Promise<void> {
   /**
    * POST /api/query
@@ -78,10 +79,8 @@ export async function setupQueryRoutes(
         };
       } catch (error) {
         const { statusCode, code, message } = classifyError(error, 'QUERY_FAILED');
-        // 写权限拒绝：任何 denied 必落审计（§6）
-        if (code === 'PERMISSION_DENIED') {
-          auditDenied(runtime.auditLogger, code);
-        }
+        // 写权限拒绝的 denied 审计由 DatabaseService.executeQuery 记录点统一写（§8.2），此处不再重复
+        // （避免同一次拒绝产生 connect/denied 多行；错误码映射保持 P1 不变：PERMISSION_DENIED → 403）
         reply.code(statusCode);
         return {
           success: false,
@@ -146,10 +145,8 @@ export async function setupQueryRoutes(
         };
       } catch (error) {
         const { statusCode, code, message } = classifyError(error, 'EXECUTE_FAILED');
-        // 写权限拒绝：任何 denied 必落审计（§6）
-        if (code === 'PERMISSION_DENIED') {
-          auditDenied(runtime.auditLogger, code);
-        }
+        // 写权限拒绝的 denied 审计由 DatabaseService.executeQuery 记录点统一写（§8.2），此处不再重复
+        // （避免同一次拒绝产生多行 denied；错误码映射保持 P1 不变：PERMISSION_DENIED → 403）
         reply.code(statusCode);
         return {
           success: false,

@@ -89,7 +89,7 @@ export class ConnectionManager {
     const sessionId = nanoid();
 
     // Create DatabaseService with cache support
-    const service = new DatabaseService(adapter, config, this.defaultCacheConfig);
+    const service = new DatabaseService(adapter, config, this.defaultCacheConfig, undefined, this.auditLogger);
 
     // Store session with service
     const session: ExtendedSession = {
@@ -242,6 +242,8 @@ export class ConnectionManager {
 
         this.sessions.delete(sessionId);
         console.log(`🧹 清理过期会话: ${sessionId}`);
+        // §8.2：清理过期会话断开同样记 disconnect（best-effort，不阻断）
+        this.auditDisconnect(session);
       }
     }
   }

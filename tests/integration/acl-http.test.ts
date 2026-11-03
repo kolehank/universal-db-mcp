@@ -423,3 +423,73 @@ describe('P1 REST ACL（用例 3-9、16、17）', () => {
     }
   });
 });
+
+describe('P4b 用例 22：AUDIT_LOG_PATH 落盘 §8.2 完整字段，写拒绝落 denied（P4 验收）', () => {
+  it('正常 config + 临时审计文件：connect ok-ro → query SELECT → 审计一行 NDJSON 含 §8.2 全部字段；DELETE 被拒 → denied 行', async () => {
+    const { server, auditPath } = await makeServer(defaultRegistryRaw(), okAdapterFactory());
+    try {
+      // key k-ro 连允许的源 ok-ro（principal=key 名）
+      const conn = await server.inject({
+        method: 'POST',
+        url: '/api/connect',
+        headers: { 'X-API-Key': 'test-key-ro' },
+        payload: { source: 'ok-ro' },
+      });
+      expect(conn.statusCode).toBe(200);
+      const sessionId = (JSON.parse(conn.body) as any).data.sessionId as string;
+
+      // SELECT 查询成功
+      const q = await server.inject({
+        method: 'POST',
+        url: '/api/query',
+        headers: { 'X-API-Key': 'test-key-ro' },
+        payload: { sessionId, query: 'SELECT * FROM users' },
+      });
+      expect(q.statusCode).toBe(200);
+
+      const lines = readAudit(auditPath);
+      const queryLines = lines.filter((l) => l.event === 'query');
+      expect(queryLines).toHaveLength(1);
+      const rec = queryLines[0];
+
+      // §8.2 字段固定表逐项断言（ts/event/requestId/transport/principal/keyFingerprint/source/clientIp/
+      //   sql/sqlBytes/sqlTruncated/status/errorCode/rows/durationMs）
+      expect(typeof rec.ts).toBe('string');
+      expect(rec.event).toBe('query');
+      expect(typeof rec.requestId).toBe('string');
+      expect(rec.transport).toBe('rest');
+      expect(rec.principal).toBe('k-ro'); // 审计主体 = apiKeys[].name
+      expect(typeof rec.keyFingerprint).toBe('string');
+      expect(rec.keyFingerprint).toMatch(/^[0-9a-f]{12}$/);
+      expect(rec.source).toBe('ok-ro');
+      expect(typeof rec.clientIp).toBe('string');
+      expect(rec.sql).toBe('SELECT * FROM users');
+      expect(rec.sqlBytes).toBe(Buffer.byteLength('SELECT * FROM users', 'utf8'));
+      expect(rec.sqlTruncated).toBe(false);
+      expect(rec.status).toBe('ok');
+      expect(rec.errorCode).toBe(null);
+      expect(typeof rec.rows).toBe('number');
+      expect(typeof rec.durationMs).toBe('number');
+      expect(rec.durationMs).toBeGreaterThanOrEqual(0);
+
+      // 写操作被拒（ok-ro=safe，DELETE 越权）→ event=denied + errorCode=PERMISSION_DENIED
+      const w = await server.inject({
+        method: 'POST',
+        url: '/api/query',
+        headers: { 'X-API-Key': 'test-key-ro' },
+        payload: { sessionId, query: 'DELETE FROM users' },
+      });
+      expect(w.statusCode).toBe(403);
+      expect((JSON.parse(w.body) as any).error.code).toBe('PERMISSION_DENIED');
+
+      const all = readAudit(auditPath);
+      const denied = all.filter((l) => l.event === 'denied');
+      expect(denied).toHaveLength(1); // 写权限拒绝只落一条 denied（DatabaseService 记录点统一写）
+      expect(denied[0].errorCode).toBe('PERMISSION_DENIED');
+      expect(denied[0].source).toBe('ok-ro');
+      expect(denied[0].principal).toBe('k-ro');
+    } finally {
+      await server.close();
+    }
+  });
+});
