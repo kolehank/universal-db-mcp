@@ -563,4 +563,52 @@ export class DatasourceRegistry {
   effectivePermission(name: string, key?: Pick<ApiKeyDef, 'maxPermission'> | null): PermissionLevel {
     return resolveEffectivePermission(this.sourceIndex.get(name), key);
   }
+
+  /**
+   * §7.1 SIGHUP 热加载：重新读取并校验注册表文件，返回**新实例**（调用方原子替换引用）。
+   * - 与启动同一套 buildRegistryFromRaw 校验管线（JSON 读取 → ${ENV:} 重新展开 → §3.3 全部校验）；
+   * - 任一错误 → 抛错（一次性列出），本实例原样保留、调用方保留旧配置，进程不退出；
+   * - 返回全新实例；已建会话（Session / sessionMeta）存的是连接时的解析结果，天然是旧配置快照。
+   */
+  reload(configPath?: string): DatasourceRegistry {
+    return loadDatasourceRegistry(configPath ?? this._configPath);
+  }
+}
+
+/**
+ * 可变注册表引用承载（评审裁决 9 的最小实现，P5）。
+ * auth/routes 经 createRegistryView 读取 holder.current 获取「当前实例」；
+ * SIGHUP 重载成功后原子执行 holder.current = newRegistry，后续请求即读到新配置，
+ * 已建会话持旧实例（快照语义自动成立）。
+ */
+export interface RegistryHolder {
+  current: DatasourceRegistry;
+}
+
+/**
+ * 构造一个「实时委托视图」（评审裁决 9）：
+ * 视图是 DatasourceRegistry 的形状（getter + 方法全部委托 holder.current），
+ * 注入 auth/routes 后，每次请求读到的是当前实例——重载替换 holder.current 即对新请求生效。
+ * 因 mcp-sse/middleware 在 setup 时捕获 registry 引用，直接用实例无法实现热替换，
+ * 用视图规避对只读文件（mcp-sse.ts）的改动；旧实例本身不可变，视图只做转发。
+ */
+export function createRegistryView(holder: RegistryHolder): DatasourceRegistry {
+  const view: { [key: string]: unknown } = {};
+  Object.defineProperties(view, {
+    sources: { get: () => holder.current.sources, enumerable: true },
+    apiKeys: { get: () => holder.current.apiKeys, enumerable: true },
+    configPath: { get: () => holder.current.configPath, enumerable: true },
+    allowAdhocConnections: { get: () => holder.current.allowAdhocConnections, enumerable: true },
+    adhocTargetAllowlist: { get: () => holder.current.adhocTargetAllowlist, enumerable: true },
+  });
+  Object.assign(view, {
+    listSources: () => holder.current.listSources(),
+    resolveSource: (name: string) => holder.current.resolveSource(name),
+    findKey: (key: string) => holder.current.findKey(key),
+    getKeyByFingerprint: (fingerprint: string) => holder.current.getKeyByFingerprint(fingerprint),
+    effectivePermission: (name: string, key?: Pick<ApiKeyDef, 'maxPermission'> | null) =>
+      holder.current.effectivePermission(name, key),
+    reload: (configPath?: string) => holder.current.reload(configPath),
+  });
+  return view as unknown as DatasourceRegistry;
 }

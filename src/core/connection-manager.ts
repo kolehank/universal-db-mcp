@@ -149,6 +149,22 @@ export class ConnectionManager {
   }
 
   /**
+   * §7.1 例外吊销（SIGHUP 重载后）：断开一个会话，但**不写 event=disconnect**
+   * （吊销专由调用方写入 event=session_revoked，避免同一关闭双记，见 http-index runReload）。
+   * - 会话不存在 → 静默返回（幂等）；
+   * - 断开失败 → 抛出（调用方 best-effort 处理，不阻断其余会话吊销）。
+   */
+  async revokeSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.service.clearSchemaCache();
+    await session.adapter.disconnect();
+    this.sessions.delete(sessionId);
+  }
+
+  /**
    * Get adapter for a session
    */
   getAdapter(sessionId: string): DbAdapter {

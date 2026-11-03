@@ -328,9 +328,9 @@ async function createRemoteMcpServer(options: {
 }
 
 /**
- * 清理会话资源
+ * 清理会话资源（P5：导出供 http-index SIGHUP 重载后的逐会话吊销调用）
  */
-async function cleanupSession(sessionId: string): Promise<void> {
+export async function cleanupSession(sessionId: string): Promise<void> {
   const mcpServer = mcpServers.get(sessionId);
   if (mcpServer) {
     await mcpServer.stop();
