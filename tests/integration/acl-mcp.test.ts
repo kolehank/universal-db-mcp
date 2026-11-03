@@ -353,7 +353,7 @@ describe('P2 MCP Streamable HTTP（用例 8、10、11、14、14a、14b、14c、1
     }
   });
 
-  it('用例 14c：registry 模式调用 connect_database → unknown tool（SDK 层 -32603 错误；tools/list 中不存在）', async () => {
+  it('用例 14c：registry 模式调用 connect_database → unknown tool（isError 文本含「未知工具」；tools/list 中不存在；会话源不变）', async () => {
     const { server } = await makeServer(defaultRegistryRaw(), okAdapterFactory());
     try {
       const sessionId = await establishSession(server, 'test-key-full', { 'X-DB-Source': 'ok-ro' });
