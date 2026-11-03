@@ -5,6 +5,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { HealthResponse, InfoResponse, ApiResponse } from '../../types/http.js';
+import { readPackageVersion } from '../../utils/package-version.js';
 
 export async function setupHealthRoutes(fastify: FastifyInstance): Promise<void> {
   /**
@@ -35,7 +36,7 @@ export async function setupHealthRoutes(fastify: FastifyInstance): Promise<void>
       success: true,
       data: {
         name: 'universal-db-mcp',
-        version: '1.0.0',
+        version: readPackageVersion(),
         mode: 'http',
         supportedDatabases: [
           'mysql',

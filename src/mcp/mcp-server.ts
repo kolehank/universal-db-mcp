@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbAdapter, DbConfig } from '../types/adapter.js';
 import { DatabaseService, SchemaCacheConfig } from '../core/database-service.js';
 import { createAdapter, normalizeDbType } from '../utils/adapter-factory.js';
+import { readPackageVersion } from '../utils/package-version.js';
 import { isAdhocAllowed, resolveEffectivePermission } from '../security/datasource-registry.js';
 import type { ApiKeyDef, DatasourceDef, DatasourceRegistry, PermissionLevel } from '../security/datasource-registry.js';
 import type { AuditContext } from '../security/audit-context.js';
@@ -74,8 +75,9 @@ export interface DatabaseMCPServerOptions {
 
 /**
  * 注册表源 → 服务端权威 DbConfig（§4.1：permissionMode 填 effective 预设名；客户端其余连接字段一律不接收）
+ * 导出供 stdio 入口（mcp-index buildMcpServerFromOptions --config+--source）复用同一套构造。
  */
-function buildSourceDbConfig(def: DatasourceDef, effective: PermissionLevel): DbConfig {
+export function buildSourceDbConfig(def: DatasourceDef, effective: PermissionLevel): DbConfig {
   return {
     type: def.type as DbConfig['type'],
     ...(def.host !== undefined ? { host: def.host } : {}),
@@ -122,7 +124,7 @@ export class DatabaseMCPServer {
     this.server = new Server(
       {
         name: 'universal-db-mcp',
-        version: '1.0.0',
+        version: readPackageVersion(),
       },
       {
         capabilities: {
