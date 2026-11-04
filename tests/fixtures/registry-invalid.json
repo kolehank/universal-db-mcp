@@ -1,0 +1,43 @@
+{
+  "$schemaVersion": 1,
+  "allowAdhocConnections": "not-a-boolean",
+  "adhocTargetAllowlist": ["10.0.0.1/24", "*:3306", "db.internal: 5432", "10.0.0.1"],
+  "apiKeys": [
+    {
+      "key": "k1",
+      "name": "dup-name",
+      "allowedSources": ["ghost-source"]
+    },
+    {
+      "key": "k1",
+      "name": "dup-name",
+      "allowedSources": ["*"]
+    },
+    {
+      "key": "",
+      "name": "empty-key",
+      "allowedSources": []
+    }
+  ],
+  "sources": [
+    {
+      "name": "dup",
+      "type": "mysql",
+      "host": "10.0.0.1",
+      "port": 3306
+    },
+    {
+      "name": "dup",
+      "type": "mysql",
+      "host": "10.0.0.2",
+      "port": 3306
+    },
+    {
+      "name": "Bad_Name",
+      "type": "not-a-type",
+      "host": "10.0.0.3",
+      "port": 3306,
+      "maxPermission": "super"
+    }
+  ]
+}

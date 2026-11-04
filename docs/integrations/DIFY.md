@@ -44,6 +44,8 @@ docker run -d \
 ```
 
 > **Note**: If `API_KEYS` is configured, all MCP endpoints require authentication via `X-API-Key` header or `Authorization: Bearer <key>`.
+>
+> **3.0+**: registry mode is recommended — set `DATASOURCE_CONFIG` to a registry file (see [Data Source ACL guide](../guides/datasource-acl.md)). In registry mode `API_KEYS` is ignored (keys are defined in the registry's `apiKeys[]`), and MCP endpoints connect via `X-DB-Source` (Streamable HTTP) or `?source=` (SSE).
 
 ### Step 2: Configure MCP Tool in Dify
 
@@ -58,7 +60,7 @@ docker run -d \
 
 **Server URL**:
 ```
-http://your-server:3000/sse?type=mysql&host=db-host&port=3306&user=root&password=your_password&database=your_database
+http://your-server:3000/sse?source=finance-ro
 ```
 
 **Headers** (if API_KEYS is configured):
@@ -66,7 +68,7 @@ http://your-server:3000/sse?type=mysql&host=db-host&port=3306&user=root&password
 X-API-Key: your-secret-key
 ```
 
-Database configuration is passed via URL parameters.
+Database configuration comes from the server-side registry (3.0 recommended). Legacy: with `ALLOW_ADHOC_CONNECTIONS=true` the raw `?type=mysql&host=...` URL parameters still work (2.x behavior).
 
 #### Option B: Streamable HTTP Endpoint (Recommended)
 
@@ -80,15 +82,10 @@ http://your-server:3000/mcp
 **Headers**:
 ```
 X-API-Key: your-secret-key
-X-DB-Type: mysql
-X-DB-Host: db-host
-X-DB-Port: 3306
-X-DB-User: root
-X-DB-Password: your_password
-X-DB-Database: your_database
+X-DB-Source: finance-ro
 ```
 
-Database configuration is passed via HTTP headers.
+The source must be a registered datasource name (3.0 recommended; connection parameters come from the server-side registry). Legacy: with `ALLOW_ADHOC_CONNECTIONS=true` the raw `X-DB-Type`/`X-DB-Host`/... headers still work (2.x behavior).
 
 ### Available Endpoints
 
@@ -116,11 +113,14 @@ Once configured, the following MCP tools will be available in your Dify applicat
 | `disconnect_database` | Disconnect from the current database |
 | `get_connection_status` | Get current database connection status |
 
+> **3.0+ registry mode**: the toolset is `connect_datasource` / `list_datasources` instead of `connect_database` — tools switch between registered sources by name; `connect_database` is not exposed.
+
 ### MCP SSE URL Parameters
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb |
+| `source` | No (3.0+ preferred) | Registered datasource name from the server-side registry; when present, other parameters below are ignored |
+| `type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb (legacy; requires `ALLOW_ADHOC_CONNECTIONS=true`) |
 | `host` | Yes* | Database host |
 | `port` | No | Database port (uses default if not specified) |
 | `user` | Yes* | Database username |
@@ -136,6 +136,8 @@ Once configured, the following MCP tools will be available in your Dify applicat
 > ⚠️ **Note**: Use camelCase for URL parameters (`permissionMode`), not hyphenated names.
 
 ### Example SSE URLs
+
+> In 3.0+, prefer `http://localhost:3000/sse?source=<registered-source-name>`. The URLs below are the legacy raw-parameter form (requires `ALLOW_ADHOC_CONNECTIONS=true`).
 
 **MySQL:**
 ```
@@ -161,7 +163,8 @@ http://localhost:3000/sse?type=redis&host=localhost&port=6379&password=secret
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `X-DB-Type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb |
+| `X-DB-Source` | No (3.0+ preferred) | Registered datasource name from the server-side registry; when present, other `X-DB-*` connection headers are ignored |
+| `X-DB-Type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb (legacy; requires `ALLOW_ADHOC_CONNECTIONS=true`) |
 | `X-DB-Host` | Yes* | Database host |
 | `X-DB-Port` | No | Database port (uses default if not specified) |
 | `X-DB-User` | Yes* | Database username |
@@ -178,18 +181,15 @@ http://localhost:3000/sse?type=redis&host=localhost&port=6379&password=secret
 
 > ⚠️ **Note**: Use hyphenated names for HTTP headers (`X-DB-Permission-Mode`).
 
+> **3.0+**: prefer `X-DB-Source`. The legacy raw `X-DB-Type`/`X-DB-Host`/... channel is disabled by default and only works when `ALLOW_ADHOC_CONNECTIONS=true`.
+
 ### Example Streamable HTTP Requests
 
 **Initialize Connection (MySQL):**
 ```bash
 curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "X-DB-Type: mysql" \
-  -H "X-DB-Host: localhost" \
-  -H "X-DB-Port: 3306" \
-  -H "X-DB-User: root" \
-  -H "X-DB-Password: secret" \
-  -H "X-DB-Database: myapp" \
+  -H "X-DB-Source: finance-ro" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
 ```
 
@@ -269,9 +269,13 @@ Add the following endpoints:
 {
   "type": "object",
   "properties": {
+    "source": {
+      "type": "string",
+      "description": "Registered datasource name (3.0+ preferred; when present, other fields are ignored)"
+    },
     "type": {
       "type": "string",
-      "description": "Database type (mysql, postgres, redis, etc.)",
+      "description": "Database type (mysql, postgres, redis, etc.) — legacy, requires ALLOW_ADHOC_CONNECTIONS=true",
       "enum": ["mysql", "postgres", "redis", "mongodb", "sqlite"]
     },
     "host": {

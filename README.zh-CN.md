@@ -301,6 +301,14 @@ npx universal-db-mcp --type mysql --permission-mode full ...
 - 通过 VPN 或跳板机连接
 - 定期审计查询日志
 
+### 数据源注册表与按源 ACL（3.0+）
+
+3.0 起，数据库连接参数**不再由客户端传入**：数据源统一写在服务端注册表文件里，每把 API key 只能使用白名单（`allowedSources`）内的源，权限模式由服务端权威决定，所有查询/连接/拒绝落结构化 NDJSON 审计，注册表支持 `SIGHUP` 热加载（配置变更零停机）。
+
+- 📖 完整运维手册：[数据源注册表与访问控制](./docs/guides/datasource-acl.md)
+- ⬆️ 从 2.x 升级：[MIGRATION-3.0.md](./MIGRATION-3.0.md)
+- ⚠️ **3.0 破坏性变更**：HTTP 原始参数通道（`X-DB-Type`/`X-DB-Host` 等请求头、`/sse?...` URL 参数、`/api/connect` body 参数）**默认关闭**；未配置 `DATASOURCE_CONFIG` 且未显式设置 `ALLOW_ADHOC_CONNECTIONS=true` 时，HTTP 模式拒绝启动。
+
 ## 🔌 支持的平台
 
 Universal DB MCP 可与任何支持 MCP 协议或 REST API 的平台配合使用。以下是完整列表：

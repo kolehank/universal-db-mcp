@@ -8,6 +8,10 @@ import type { DbAdapter, DbConfig, QueryResult, SchemaInfo, TableInfo, EnumValue
 import { validateQuery } from '../utils/safety.js';
 import { SchemaEnhancer, SchemaEnhancerConfig } from '../utils/schema-enhancer.js';
 import { DataMasker, createDataMasker } from '../utils/data-masking.js';
+import { AclError } from '../security/errors.js';
+import { getAuditContext } from '../security/audit-context.js';
+import { MAX_SQL_LENGTH } from '../security/audit-logger.js';
+import type { AuditLogger, AuditRecord } from '../security/audit-logger.js';
 
 /**
  * Schema 缓存配置
@@ -69,30 +73,79 @@ export class DatabaseService {
   // 数据脱敏器
   private dataMasker: DataMasker;
 
+  // 审计日志写入器（P4b 记录点，规格 §8.2；缺省 undefined 则不写审计）
+  private auditLogger?: AuditLogger;
+
   constructor(
     adapter: DbAdapter,
     config: DbConfig,
     cacheConfig?: Partial<SchemaCacheConfig>,
-    enhancerConfig?: Partial<SchemaEnhancerConfig>
+    enhancerConfig?: Partial<SchemaEnhancerConfig>,
+    auditLogger?: AuditLogger
   ) {
     this.adapter = adapter;
     this.config = config;
     this.cacheConfig = { ...DEFAULT_CACHE_CONFIG, ...cacheConfig };
     this.schemaEnhancer = new SchemaEnhancer(enhancerConfig);
     this.dataMasker = createDataMasker(true);
+    this.auditLogger = auditLogger;
   }
 
   /**
    * Execute a query with validation
+   * P1 错误分类（评审裁决 §4-10）：validateQuery 抛出的写权限拒绝包装为 AclError('PERMISSION_DENIED')，
+   * 供路由按 §6 错误码映射 403。
+   * P4b 审计记录点（§8.2）：validateQuery 拒绝 → event=denied（与 REST/MCP 既有 denied 语义一致，errorCode 必填）；
+   * 执行异常 → event=query status=error；成功 → event=query status=ok。全部 best-effort，写失败不阻断查询。
    */
   async executeQuery(query: string, params?: unknown[]): Promise<QueryResult> {
+    const startedAt = Date.now();
+
     // Validate query safety
-    this.validateQuery(query);
+    try {
+      this.validateQuery(query);
+    } catch (error) {
+      // §8.2：权限拒绝记 event=denied（sql 可空；errorCode 必填），而非 query-error
+      this.writeAudit({
+        event: 'denied',
+        status: 'denied',
+        errorCode: 'PERMISSION_DENIED',
+      });
+      throw new AclError(
+        'PERMISSION_DENIED',
+        error instanceof Error ? error.message : '操作被拒绝：当前权限不允许该操作'
+      );
+    }
 
-    // Execute query
-    const result = await this.adapter.executeQuery(query, params);
+    const sqlInfo = this.sqlInfo(query);
+    try {
+      // Execute query
+      const result = await this.adapter.executeQuery(query, params);
 
-    return result;
+      this.writeAudit({
+        event: 'query',
+        status: 'ok',
+        errorCode: null,
+        sql: sqlInfo.sql,
+        sqlBytes: sqlInfo.sqlBytes,
+        sqlTruncated: sqlInfo.sqlTruncated,
+        rows: result.rows?.length ?? 0,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return result;
+    } catch (error) {
+      this.writeAudit({
+        event: 'query',
+        status: 'error',
+        errorCode: error instanceof AclError ? error.code : undefined,
+        sql: sqlInfo.sql,
+        sqlBytes: sqlInfo.sqlBytes,
+        sqlTruncated: sqlInfo.sqlTruncated,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
   }
 
   /**
@@ -100,45 +153,60 @@ export class DatabaseService {
    * @param forceRefresh - 是否强制刷新缓存，忽略现有缓存
    */
   async getSchema(forceRefresh: boolean = false): Promise<SchemaInfo> {
-    const now = Date.now();
+    const startedAt = Date.now();
+    try {
+      const now = Date.now();
 
-    // 检查是否可以使用缓存
-    if (
-      !forceRefresh &&
-      this.cacheConfig.enabled &&
-      this.schemaCache &&
-      (now - this.schemaCacheTime) < this.cacheConfig.ttl
-    ) {
-      this.cacheHitCount++;
-      console.error(`📦 Schema 缓存命中 (命中率: ${this.getCacheHitRate()}%)`);
-      return this.schemaCache;
+      // 检查是否可以使用缓存
+      if (
+        !forceRefresh &&
+        this.cacheConfig.enabled &&
+        this.schemaCache &&
+        (now - this.schemaCacheTime) < this.cacheConfig.ttl
+      ) {
+        this.cacheHitCount++;
+        console.error(`📦 Schema 缓存命中 (命中率: ${this.getCacheHitRate()}%)`);
+        // §8.2：metadata 记录点（缓存命中同样记录，可只记耗时 + status）
+        this.writeAudit({ event: 'metadata', status: 'ok', errorCode: null, durationMs: Date.now() - startedAt });
+        return this.schemaCache;
+      }
+
+      // 缓存未命中或已过期，重新获取
+      this.cacheMissCount++;
+      console.error(`🔄 正在获取数据库 Schema${forceRefresh ? ' (强制刷新)' : this.schemaCache ? ' (缓存已过期)' : ' (首次加载)'}...`);
+
+      const startTime = Date.now();
+      const schema = await this.adapter.getSchema();
+      const elapsed = Date.now() - startTime;
+
+      // 增强 Schema 信息（隐式关系推断、关系类型细化）
+      const enhancedSchema = this.enhanceSchema(schema);
+
+      // 更新缓存
+      if (this.cacheConfig.enabled) {
+        this.schemaCache = enhancedSchema;
+        this.schemaCacheTime = now;
+
+        // 统计增强信息
+        const explicitRelCount = schema.relationships?.length || 0;
+        const totalRelCount = enhancedSchema.relationships?.length || 0;
+        const inferredRelCount = totalRelCount - explicitRelCount;
+
+        console.error(`✅ Schema 已缓存 (获取耗时: ${elapsed}ms, 表数量: ${enhancedSchema.tables.length}, 显式关系: ${explicitRelCount}, 推断关系: ${inferredRelCount}, 缓存有效期: ${this.cacheConfig.ttl / 1000}秒)`);
+      }
+
+      // §8.2：metadata 记录点（可只记耗时 + status；不需要 sql）
+      this.writeAudit({ event: 'metadata', status: 'ok', errorCode: null, durationMs: Date.now() - startedAt });
+      return enhancedSchema;
+    } catch (error) {
+      this.writeAudit({
+        event: 'metadata',
+        status: 'error',
+        errorCode: error instanceof AclError ? error.code : undefined,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
     }
-
-    // 缓存未命中或已过期，重新获取
-    this.cacheMissCount++;
-    console.error(`🔄 正在获取数据库 Schema${forceRefresh ? ' (强制刷新)' : this.schemaCache ? ' (缓存已过期)' : ' (首次加载)'}...`);
-
-    const startTime = Date.now();
-    const schema = await this.adapter.getSchema();
-    const elapsed = Date.now() - startTime;
-
-    // 增强 Schema 信息（隐式关系推断、关系类型细化）
-    const enhancedSchema = this.enhanceSchema(schema);
-
-    // 更新缓存
-    if (this.cacheConfig.enabled) {
-      this.schemaCache = enhancedSchema;
-      this.schemaCacheTime = now;
-
-      // 统计增强信息
-      const explicitRelCount = schema.relationships?.length || 0;
-      const totalRelCount = enhancedSchema.relationships?.length || 0;
-      const inferredRelCount = totalRelCount - explicitRelCount;
-
-      console.error(`✅ Schema 已缓存 (获取耗时: ${elapsed}ms, 表数量: ${enhancedSchema.tables.length}, 显式关系: ${explicitRelCount}, 推断关系: ${inferredRelCount}, 缓存有效期: ${this.cacheConfig.ttl / 1000}秒)`);
-    }
-
-    return enhancedSchema;
   }
 
   /**
@@ -172,6 +240,27 @@ export class DatabaseService {
    * @param forceRefresh - 是否强制刷新缓存
    */
   async getTableInfo(tableName: string, forceRefresh: boolean = false): Promise<TableInfo> {
+    const startedAt = Date.now();
+    try {
+      return await this.getTableInfoInner(tableName, forceRefresh, startedAt);
+    } catch (error) {
+      // §8.2：metadata 记录点（可只记耗时 + status）
+      this.writeAudit({
+        event: 'metadata',
+        status: 'error',
+        errorCode: error instanceof AclError ? error.code : undefined,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+  }
+
+  /** getTableInfo 主体（单独抽出，便于在统一 try/catch 内记录 event=metadata） */
+  private async getTableInfoInner(
+    tableName: string,
+    forceRefresh: boolean,
+    startedAt: number
+  ): Promise<TableInfo> {
     const schema = await this.getSchema(forceRefresh);
 
     // 1. 精确匹配 name 字段（已包含 schema 前缀）
@@ -208,6 +297,8 @@ export class DatabaseService {
       throw new Error(`表 "${tableName}" 不存在`);
     }
 
+    // §8.2：metadata 记录点（可只记耗时 + status）
+    this.writeAudit({ event: 'metadata', status: 'ok', errorCode: null, durationMs: Date.now() - startedAt });
     return table;
   }
 
@@ -365,8 +456,8 @@ export class DatabaseService {
       query = this.buildEnumValuesQuery(actualTableName, actualColumnName, safeLimit + 1);
     }
 
-    // 4. 执行查询
-    const result = await this.adapter.executeQuery(query);
+    // 4. 执行查询（P4b：内部查询同样记 event=query，规格 §8.2）
+    const result = await this.executeInternalQuery(query);
 
     // 5. 处理结果
     const hasMore = result.rows.length > safeLimit;
@@ -441,8 +532,8 @@ export class DatabaseService {
     // 4. 构建查询 SQL
     const query = this.buildSampleDataQuery(actualTableName, selectedColumns, safeLimit);
 
-    // 5. 执行查询
-    const result = await this.adapter.executeQuery(query);
+    // 5. 执行查询（P4b：内部查询同样记 event=query，规格 §8.2）
+    const result = await this.executeInternalQuery(query);
 
     // 6. 脱敏处理
     const { maskedRows, maskedColumns } = this.dataMasker.maskRows(result.rows);
@@ -454,6 +545,83 @@ export class DatabaseService {
       rowCount: maskedRows.length,
       masked: maskedColumns.length > 0,
       maskedColumns: maskedColumns.length > 0 ? maskedColumns : undefined,
+    };
+  }
+
+  /**
+   * 执行 getEnumValues/getSampleData 内部的适配器查询，并记 event=query 审计（§8.2）。
+   * 不走 executeQuery（避免二次权限校验语义）；只负责「记录」，不改变查询行为（best-effort）。
+   */
+  private async executeInternalQuery(query: string, params?: unknown[]): Promise<QueryResult> {
+    const startedAt = Date.now();
+    const sqlInfo = this.sqlInfo(query);
+    try {
+      const result = await this.adapter.executeQuery(query, params);
+      this.writeAudit({
+        event: 'query',
+        status: 'ok',
+        errorCode: null,
+        sql: sqlInfo.sql,
+        sqlBytes: sqlInfo.sqlBytes,
+        sqlTruncated: sqlInfo.sqlTruncated,
+        rows: result.rows?.length ?? 0,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      this.writeAudit({
+        event: 'query',
+        status: 'error',
+        errorCode: error instanceof AclError ? error.code : undefined,
+        sql: sqlInfo.sql,
+        sqlBytes: sqlInfo.sqlBytes,
+        sqlTruncated: sqlInfo.sqlTruncated,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * §8.2 审计写入（best-effort）：要求注入 auditLogger 且当前请求处于 AuditContext 作用域内。
+   * - 无审计上下文则跳过（不写 minimal 行）：REST 由 auth/auditScope 注入，MCP 由工具 handler
+   *   withCallContext 注入，stdio 由 handler 注入；测试直接构造上下文。
+   * - logger 写失败由 AuditLogger 自行降级（绝不抛出、不阻断请求）。
+   */
+  private writeAudit(entry: Omit<AuditRecord, 'status'> & { status?: string }): void {
+    const logger = this.auditLogger;
+    if (!logger) {
+      return;
+    }
+    const ctx = getAuditContext();
+    if (!ctx) {
+      return;
+    }
+    logger.write({
+      requestId: ctx.requestId,
+      transport: ctx.transport,
+      principal: ctx.principal,
+      keyFingerprint: ctx.keyFingerprint,
+      source: ctx.source || undefined,
+      clientIp: ctx.clientIp,
+      auditUser: ctx.auditUser, // 仅 TRUST_AUDIT_USER_HEADER=true 时由 auth 注入；logger 在 false 时丢弃
+      status: 'ok',
+      ...entry,
+    });
+  }
+
+  /**
+   * SQL 审计字段：按 §8.2 截断 2048 字符（有 logger 时复用 logger.truncateSql，保持单实现源）。
+   */
+  private sqlInfo(sql: string): { sql: string; sqlBytes: number; sqlTruncated: boolean } {
+    if (this.auditLogger) {
+      return this.auditLogger.truncateSql(sql);
+    }
+    const truncated = sql.length > MAX_SQL_LENGTH ? sql.slice(0, MAX_SQL_LENGTH) : sql;
+    return {
+      sql: truncated,
+      sqlBytes: Buffer.byteLength(truncated, 'utf8'),
+      sqlTruncated: truncated.length < sql.length,
     };
   }
 

@@ -107,7 +107,7 @@ describe('HTTP API Integration Tests', () => {
       expect(body.error.code).toBe('FORBIDDEN');
     });
 
-    it('should accept requests with valid API key', async () => {
+    it('should accept requests with valid API key (registry-less mode: adhoc denied without source)', async () => {
       const response = await server.inject({
         method: 'POST',
         url: '/api/connect',
@@ -120,18 +120,30 @@ describe('HTTP API Integration Tests', () => {
         }
       });
 
-      // May fail due to actual connection, but should pass auth
-      expect([200, 500]).toContain(response.statusCode);
+      // P1 fail-closed：无 DATASOURCE_CONFIG 且未开 ALLOW_ADHOC_CONNECTIONS 时，无 source 的
+      // adhoc 连接请求 → 403 ADHOC_DISABLED（不再 [200,500]）。
+      // 鉴权通过（带 source）的 200 场景由 acl-http.test.ts 覆盖。
+      expect(response.statusCode).toBe(403);
+      const body = JSON.parse(response.body);
+      expect(body.success).toBe(false);
+      expect(body.error.code).toBe('ADHOC_DISABLED');
     });
   });
 
   describe('CORS', () => {
-    it('should include CORS headers', async () => {
+    it('should handle CORS preflight with origin headers', async () => {
+      // @fastify/cors v9 对无 Origin 的预检返回 400（测试过时而非服务端缺陷）。
+      // 浏览器真实预检必带 origin + access-control-request-method，返回 204。
       const response = await server.inject({
         method: 'OPTIONS',
-        url: '/api/health'
+        url: '/api/health',
+        headers: {
+          origin: 'http://localhost',
+          'access-control-request-method': 'POST'
+        }
       });
 
+      expect(response.statusCode).toBe(204);
       expect(response.headers['access-control-allow-origin']).toBeDefined();
       expect(response.headers['access-control-allow-methods']).toBeDefined();
     });

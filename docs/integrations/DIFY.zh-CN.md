@@ -44,6 +44,8 @@ docker run -d \
 ```
 
 > **注意**: 如果配置了 `API_KEYS`，所有 MCP 端点都需要通过 `X-API-Key` 请求头或 `Authorization: Bearer <key>` 进行认证。
+>
+> **3.0+**：推荐注册表模式——设置 `DATASOURCE_CONFIG` 指向注册表文件（见[数据源注册表与访问控制](../guides/datasource-acl.md)）。注册表模式下 `API_KEYS` **被忽略**（key 定义在注册表 `apiKeys[]`），MCP 端点通过 `X-DB-Source`（Streamable HTTP）或 `?source=`（SSE）连接。
 
 ### 步骤 2: 在 Dify 中配置 MCP 工具
 
@@ -58,7 +60,7 @@ docker run -d \
 
 **服务器 URL**:
 ```
-http://your-server:3000/sse?type=mysql&host=db-host&port=3306&user=root&password=your_password&database=your_database
+http://your-server:3000/sse?source=finance-ro
 ```
 
 **请求头**（如果配置了 API_KEYS）:
@@ -66,7 +68,7 @@ http://your-server:3000/sse?type=mysql&host=db-host&port=3306&user=root&password
 X-API-Key: your-secret-key
 ```
 
-数据库配置通过 URL 参数传递。
+数据库配置来自服务端注册表（3.0 推荐）。Legacy：`ALLOW_ADHOC_CONNECTIONS=true` 时可继续使用 `?type=mysql&host=...` 原始 URL 参数（2.x 行为）。
 
 #### 选项 B：Streamable HTTP 端点（推荐）
 
@@ -80,15 +82,10 @@ http://your-server:3000/mcp
 **请求头**:
 ```
 X-API-Key: your-secret-key
-X-DB-Type: mysql
-X-DB-Host: db-host
-X-DB-Port: 3306
-X-DB-User: root
-X-DB-Password: your_password
-X-DB-Database: your_database
+X-DB-Source: finance-ro
 ```
 
-数据库配置通过 HTTP 请求头传递。
+source 必须是注册表中已配置的源名（3.0 推荐，连接参数来自服务端注册表）。Legacy：`ALLOW_ADHOC_CONNECTIONS=true` 时可继续使用 `X-DB-Type`/`X-DB-Host`/... 原始参数头（2.x 行为）。
 
 ### 可用端点
 
@@ -116,11 +113,14 @@ X-DB-Database: your_database
 | `disconnect_database` | 断开当前数据库连接 |
 | `get_connection_status` | 获取当前数据库连接状态 |
 
+> **3.0+ 注册表模式**：工具集变为 `connect_datasource` / `list_datasources`（不含 `connect_database`）——按源名在注册表内切换；`connect_database` 不暴露。
+
 ### MCP SSE URL 参数
 
 | 参数 | 必填 | 描述 |
 |------|------|------|
-| `type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb |
+| `source` | 否（3.0+ 推荐） | 注册表中已配置的源名；存在时忽略以下其他参数 |
+| `type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb（legacy，需 `ALLOW_ADHOC_CONNECTIONS=true`） |
 | `host` | 是* | 数据库主机 |
 | `port` | 否 | 数据库端口（不指定则使用默认端口） |
 | `user` | 是* | 数据库用户名 |
@@ -136,6 +136,8 @@ X-DB-Database: your_database
 > ⚠️ **注意**：URL 参数使用驼峰命名（`permissionMode`），不是连字符命名。
 
 ### SSE URL 示例
+
+> 3.0+ 推荐：`http://localhost:3000/sse?source=<注册表源名>`。下面的 URL 均为 legacy 原始参数形式（需 `ALLOW_ADHOC_CONNECTIONS=true`）。
 
 **MySQL:**
 ```
@@ -171,7 +173,8 @@ http://localhost:3000/sse?type=kingbase&host=localhost&port=54321&user=system&pa
 
 | 请求头 | 必填 | 描述 |
 |--------|------|------|
-| `X-DB-Type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb |
+| `X-DB-Source` | 否（3.0+ 推荐） | 注册表中已配置的源名；存在时忽略其他 `X-DB-*` 连接头 |
+| `X-DB-Type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb（legacy，需 `ALLOW_ADHOC_CONNECTIONS=true`） |
 | `X-DB-Host` | 是* | 数据库主机 |
 | `X-DB-Port` | 否 | 数据库端口（不指定则使用默认端口） |
 | `X-DB-User` | 是* | 数据库用户名 |
@@ -188,18 +191,15 @@ http://localhost:3000/sse?type=kingbase&host=localhost&port=54321&user=system&pa
 
 > ⚠️ **注意**：HTTP Header 使用连字符命名（`X-DB-Permission-Mode`）。
 
+> **3.0+**：优先使用 `X-DB-Source`。legacy 的 `X-DB-Type`/`X-DB-Host`/... 通道默认关闭，仅当 `ALLOW_ADHOC_CONNECTIONS=true` 时可用。
+
 ### Streamable HTTP 请求示例
 
 **初始化连接（MySQL）：**
 ```bash
 curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "X-DB-Type: mysql" \
-  -H "X-DB-Host: localhost" \
-  -H "X-DB-Port: 3306" \
-  -H "X-DB-User: root" \
-  -H "X-DB-Password: secret" \
-  -H "X-DB-Database: myapp" \
+  -H "X-DB-Source: finance-ro" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
 ```
 
@@ -279,9 +279,13 @@ docker run -d \
 {
   "type": "object",
   "properties": {
+    "source": {
+      "type": "string",
+      "description": "注册表源名（3.0+ 推荐；存在时忽略其他字段）"
+    },
     "type": {
       "type": "string",
-      "description": "数据库类型（mysql、postgres、redis 等）",
+      "description": "数据库类型（mysql、postgres、redis 等）— legacy，需 ALLOW_ADHOC_CONNECTIONS=true",
       "enum": ["mysql", "postgres", "redis", "mongodb", "sqlite"]
     },
     "host": {

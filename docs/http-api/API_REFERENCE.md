@@ -12,7 +12,9 @@ Universal Database MCP Server HTTP API provides RESTful endpoints and MCP protoc
 
 All endpoints (except `/api/health` and `/api/info`) require API key authentication, including REST API and MCP SSE/Streamable HTTP endpoints.
 
-> **Note**: If `API_KEYS` environment variable is not configured, authentication is skipped (development mode).
+> **Note**: If `API_KEYS` environment variable is not configured, authentication is skipped (development mode, legacy mode only).
+
+> **3.0+ (registry mode)**: When `DATASOURCE_CONFIG` is set, API keys come from the server-side registry's `apiKeys[]`. Authentication is **mandatory** (even if `API_KEYS` is empty), and `API_KEYS` is ignored.
 
 ### Methods
 
@@ -105,6 +107,7 @@ Establish an SSE connection. Database configuration is passed via URL parameters
 **URL Parameters**:
 | Parameter | Required | Description |
 |-----------|----------|-------------|
+| `source` | No | **(3.0+ preferred)** Registered datasource name from the server-side registry. When present, all other parameters below are ignored. |
 | `type` | Yes | Database type |
 | `host` | Yes* | Database host |
 | `port` | No | Database port |
@@ -120,9 +123,11 @@ Establish an SSE connection. Database configuration is passed via URL parameters
 
 > ⚠️ **Note**: Use camelCase for URL parameters (`permissionMode`, `permissions`), not hyphenated names.
 
+> **3.0+**: prefer `?source=<name>`. The raw-parameter (`type`/`host`/...) channel is disabled by default and requires `ALLOW_ADHOC_CONNECTIONS=true`.
+
 **Request Example**:
 ```bash
-curl "http://localhost:3000/sse?type=mysql&host=localhost&port=3306&user=root&password=secret&database=mydb" \
+curl "http://localhost:3000/sse?source=finance-ro" \
   -H "X-API-Key: your-secret-key"
 ```
 
@@ -151,7 +156,8 @@ MCP Streamable HTTP endpoint. Database configuration is passed via headers.
 | Header | Required | Description |
 |--------|----------|-------------|
 | `X-API-Key` | Yes* | API key (or use Authorization Bearer) |
-| `X-DB-Type` | Yes | Database type |
+| `X-DB-Source` | No | **(3.0+ preferred)** Registered datasource name; when present, all other `X-DB-*` connection headers are ignored. |
+| `X-DB-Type` | Yes* | Database type |
 | `X-DB-Host` | Yes* | Database host |
 | `X-DB-Port` | No | Database port |
 | `X-DB-User` | Yes* | Username |
@@ -167,17 +173,14 @@ MCP Streamable HTTP endpoint. Database configuration is passed via headers.
 
 > ⚠️ **Note**: Use hyphenated names for HTTP headers (`X-DB-Permission-Mode`, `X-DB-Permissions`).
 
+> **3.0+**: prefer `X-DB-Source`. The legacy raw `X-DB-Type`/`X-DB-Host`/... channel is disabled by default and requires `ALLOW_ADHOC_CONNECTIONS=true`.
+
 **Initialize Request Example**:
 ```bash
 curl -X POST http://localhost:3000/mcp \
   -H "X-API-Key: your-secret-key" \
   -H "Content-Type: application/json" \
-  -H "X-DB-Type: mysql" \
-  -H "X-DB-Host: localhost" \
-  -H "X-DB-Port: 3306" \
-  -H "X-DB-User: root" \
-  -H "X-DB-Password: secret" \
-  -H "X-DB-Database: mydb" \
+  -H "X-DB-Source: finance-ro" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
 ```
 
@@ -309,7 +312,8 @@ Connect to a database and create a session.
 ```
 
 **Parameters**:
-- `type` (string, required): Database type (mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb)
+- `source` (string, optional): **(3.0+)** Registered datasource name from the server-side registry (`DATASOURCE_CONFIG`). When provided, all other connection fields (`type`/`host`/`port`/`user`/`password`/`database`/...) are **ignored** and connection parameters come from the registry. Preferred in 3.0+.
+- `type` (string, required for legacy/adhoc): Database type (mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb)
 - `host` (string, required for non-SQLite): Database host
 - `port` (number, required for non-SQLite): Database port
 - `user` (string, optional): Username
@@ -338,6 +342,16 @@ curl -X POST http://localhost:3000/api/connect \
   }'
 ```
 
+**Registry Source Example** (3.0+):
+```bash
+curl -X POST http://localhost:3000/api/connect \
+  -H "X-API-Key: your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "finance-ro"
+  }'
+```
+
 **Response** (200 OK):
 ```json
 {
@@ -354,12 +368,12 @@ curl -X POST http://localhost:3000/api/connect \
 }
 ```
 
-**Error Response** (500):
+**Error Response** (502):
 ```json
 {
   "success": false,
   "error": {
-    "code": "CONNECTION_FAILED",
+    "code": "CONNECT_FAILED",
     "message": "Access denied for user 'root'@'localhost'"
   },
   "metadata": {
@@ -368,6 +382,17 @@ curl -X POST http://localhost:3000/api/connect \
   }
 }
 ```
+
+**ACL Error Responses** (3.0+, registry mode):
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `INVALID_REQUEST` | No connection parameters provided (no `source`, no connection fields) |
+| 403 | `ADHOC_DISABLED` | Raw `type`/`host`/... parameters sent while adhoc is disabled |
+| 403 | `ADHOC_TARGET_DENIED` | Adhoc target is not in `adhocTargetAllowlist` |
+| 404 | `SOURCE_NOT_FOUND` | Source does not exist **or** is not in the key's `allowedSources` (deliberately indistinguishable) |
+| 403 | `PERMISSION_DENIED` | Operation exceeds the effective permission (see `/api/query`) |
+| 502 | `CONNECT_FAILED` | Server failed to connect to the database |
 
 #### POST /api/disconnect
 
@@ -455,13 +480,13 @@ curl -X POST http://localhost:3000/api/query \
 }
 ```
 
-**Error Response - Write Operation Blocked** (500):
+**Error Response - Write Permission Denied** (403):
 ```json
 {
   "success": false,
   "error": {
-    "code": "QUERY_FAILED",
-    "message": "❌ 操作被拒绝：当前处于只读安全模式"
+    "code": "PERMISSION_DENIED",
+    "message": "❌ 操作被拒绝：当前权限不允许该操作"
   },
   "metadata": {
     "timestamp": "2026-01-27T12:00:00.000Z",
@@ -473,6 +498,8 @@ curl -X POST http://localhost:3000/api/query \
 #### POST /api/execute
 
 Execute a write operation (INSERT, UPDATE, DELETE, etc.). Requires `allowWrite: true` in connection config.
+
+> **3.0+ note**: In registry mode, client-provided `allowWrite`/`permissionMode` are ignored; write access is determined by the source's `maxPermission`. A blocked write returns **403 `PERMISSION_DENIED`** (audited as `denied`).
 
 **Request Body**:
 ```json
@@ -826,8 +853,13 @@ curl "http://localhost:3000/api/sample-data?sessionId=V1StGXR8_Z5jdHi6B-myT&tabl
 |------|-------------|-------------|
 | `UNAUTHORIZED` | 401 | Missing API key |
 | `FORBIDDEN` | 403 | Invalid API key |
+| `INVALID_REQUEST` | 400 | Missing/invalid connection parameters (no `source` and no connection fields) |
+| `ADHOC_DISABLED` | 403 | Raw connection parameters sent while adhoc is disabled |
+| `ADHOC_TARGET_DENIED` | 403 | Adhoc target is not in `adhocTargetAllowlist` |
+| `SOURCE_NOT_FOUND` | 404 | Source does not exist or is not allowed for this API key |
+| `PERMISSION_DENIED` | 403 | Operation exceeds the effective permission |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
-| `CONNECTION_FAILED` | 500 | Failed to connect to database |
+| `CONNECT_FAILED` | 502 | Failed to connect to the database |
 | `DISCONNECTION_FAILED` | 500 | Failed to disconnect from database |
 | `QUERY_FAILED` | 500 | Failed to execute query |
 | `EXECUTE_FAILED` | 500 | Failed to execute operation |
@@ -861,6 +893,8 @@ SESSION_CLEANUP_INTERVAL=300000  # 5 minutes
 Expired sessions are automatically cleaned up every 5 minutes (configurable).
 
 ## Database-Specific Examples
+
+> These examples use the legacy/adhoc path (raw connection fields). In 3.0+, if a registry is configured (`DATASOURCE_CONFIG`), use `"source"` instead — see [POST /api/connect](#post-apiconnect). The raw `type`/`host`/... channel requires `ALLOW_ADHOC_CONNECTIONS=true`.
 
 ### MySQL
 ```bash

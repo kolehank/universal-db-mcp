@@ -137,6 +137,56 @@ export function loadConfig(): AppConfig {
 }
 
 /**
+ * Security 相关环境变量（规格 datasource-acl.md §3.1）
+ * 本 Phase 只负责解析备用；接线在后续 Phase 完成。
+ */
+export interface SecurityEnvConfig {
+  /** 注册表 JSON 绝对路径（HTTP 模式必填*，见 §3.1） */
+  datasourceConfig?: string;
+  /** ALLOW_ADHOC_CONNECTIONS：'true' 时允许客户端传连接参数 */
+  allowAdhocConnections?: boolean;
+  /** ADHOC_TARGET_ALLOWLIST：逗号分隔 host:port（评审裁决 §4-5） */
+  adhocTargetAllowlist?: string[];
+  /** AUDIT_LOG_PATH：审计 NDJSON 文件路径 */
+  auditLogPath?: string;
+  /** TRUST_AUDIT_USER_HEADER：true 时把 X-Audit-User 记入审计（仅审计关联，不参与授权） */
+  trustAuditUserHeader?: boolean;
+}
+
+/**
+ * 解析 §3.1 安全相关环境变量。未设置的项保持 undefined 默认。
+ * loadConfig/loadFromEnv 的既有字段与返回值行为不受影响。
+ */
+export function loadSecurityEnv(): SecurityEnvConfig {
+  const config: SecurityEnvConfig = {};
+
+  if (process.env.DATASOURCE_CONFIG) {
+    config.datasourceConfig = process.env.DATASOURCE_CONFIG;
+  }
+
+  if (process.env.ALLOW_ADHOC_CONNECTIONS !== undefined) {
+    config.allowAdhocConnections = process.env.ALLOW_ADHOC_CONNECTIONS === 'true';
+  }
+
+  if (process.env.ADHOC_TARGET_ALLOWLIST !== undefined) {
+    config.adhocTargetAllowlist = process.env.ADHOC_TARGET_ALLOWLIST
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }
+
+  if (process.env.AUDIT_LOG_PATH) {
+    config.auditLogPath = process.env.AUDIT_LOG_PATH;
+  }
+
+  if (process.env.TRUST_AUDIT_USER_HEADER !== undefined) {
+    config.trustAuditUserHeader = process.env.TRUST_AUDIT_USER_HEADER === 'true';
+  }
+
+  return config;
+}
+
+/**
  * Validate configuration
  */
 export function validateConfig(config: AppConfig): void {

@@ -2,6 +2,36 @@
 
 本文档记录 Universal DB MCP 的版本更新历史。
 
+## [3.0.0] - 2026-11-04
+
+### 破坏性变更
+
+- **客户端不再传连接参数** - 3.0 起使用「数据源注册表 + 按源 ACL」模型：连接必须使用注册表 source（`connect_datasource` / `X-DB-Source`），客户端传地址/账号/密码/权限参数一律不接受（注册表模式），凭据与服务端配置在 `DATASOURCE_CONFIG` 注册表文件中
+- **HTTP 原始参数通道默认关闭** - 无 `DATASOURCE_CONFIG` 且未设置 `ALLOW_ADHOC_CONNECTIONS=true` 时，HTTP/SSE/Streamable 的原始连接参数请求返回 `403 ADHOC_DISABLED`（fail-closed）；`ADHOC_TARGET_ALLOWLIST` 可限定 adhoc 出站目标
+- **鉴权改为注册表 apiKeys** - API Key 由注册表文件 `apiKeys[].key` 定义并携带 `allowedSources` / `maxPermission` / 名称；`API_KEYS` 环境变量在注册表存在时被忽略（打 WARN）
+- **`connect_database` 工具在注册表模式不再暴露** - registry-stdio / registry-remote 的 `tools/list` 不含 `connect_database`（未知工具），仅 legacy / legacy-remote 模式保留
+- **错误码体系** - 结构化错误码：`SOURCE_NOT_FOUND`（404）、`PERMISSION_DENIED`（403）、`CONNECT_FAILED`（502）、`ADHOC_DISABLED` / `ADHOC_TARGET_DENIED`（403）等，替代过去的恒 500
+- **无 config 的 HTTP 启动 fail-closed** - 无 `DATASOURCE_CONFIG` 且未开 `ALLOW_ADHOC_CONNECTIONS` 时 HTTP 模式启动失败（退出码 1，stderr 提示 `DATASOURCE_CONFIG`）
+- **审计默认关闭** - 必须配置 `AUDIT_LOG_PATH` 才会落盘 NDJSON 审计日志，否则审计禁用并打印启动 WARN；`TRUST_AUDIT_USER_HEADER` 控制是否信任 `X-Audit-User` 头（仅审计关联，不参与授权）
+
+#### 迁移
+
+从 2.x 升级请参考 `MIGRATION-3.0.md`。
+
+### 新增
+
+- 数据源注册表（`DATASOURCE_CONFIG`）与按源 ACL（key 的 `allowedSources`、`maxPermission` 取源/key 两者的 min）
+- 新 MCP 工具：`connect_datasource`、`list_datasources`（仅返回 name/type/description，不暴露连接凭据）
+- SIGHUP 热加载：配置变更动态生效 + 会话吊销（`key_revoked` / `source_removed` / `source_revoked`）
+- NDJSON 审计日志（`AUDIT_LOG_PATH`，SQL 截断 2048，失败降级不阻断）
+
+### 审查修复（3.0.0 发布前）
+
+- `ADHOC_DISABLED` 错误文案改为定位准确的中文说明（区分"有注册表但 adhoc 关闭"与"无注册表"两种场景）
+- `config_reload` 审计改为原生字段 `configSha256` / `sourceCount` / `keyCount` / `closedSessions`（不再借用 `sql` 字段承载 JSON）
+- `session_revoked` 审计补充 `reason`（吊销原因）与 `sessionId` 字段
+- MIGRATION-3.0.md 明示 legacy 模式"未配置 API_KEYS 即放行"为保留的开发行为，生产必须注册表模式或配置 `API_KEYS`
+
 ## [2.14.0] - 2026
 
 ### 新增

@@ -72,19 +72,16 @@ https://your-server-url/mcp
 **请求头配置**：
 ```
 X-API-Key: your-secret-api-key
-X-DB-Type: mysql
-X-DB-Host: your-database-host
-X-DB-Port: 3306
-X-DB-User: your-username
-X-DB-Password: your-password
-X-DB-Database: your-database-name
+X-DB-Source: finance-ro
 ```
+
+source 必须是注册表中已配置的源名（3.0 推荐，连接参数来自服务端注册表）。Legacy：`ALLOW_ADHOC_CONNECTIONS=true` 时仍可使用 `X-DB-Type`/`X-DB-Host`/... 原始参数头（2.x 行为）。
 
 #### 方式 B: SSE 端点
 
 **服务器 URL**：
 ```
-https://your-server-url/sse?type=mysql&host=your-database-host&port=3306&user=your-username&password=your-password&database=your-database-name
+https://your-server-url/sse?source=finance-ro
 ```
 
 **请求头配置**：
@@ -92,7 +89,7 @@ https://your-server-url/sse?type=mysql&host=your-database-host&port=3306&user=yo
 X-API-Key: your-secret-api-key
 ```
 
-> **说明**：SSE 端点通过 URL 参数传递数据库配置，而 Streamable HTTP 使用请求头。
+> **说明**：3.0+ 优先使用 `?source=<源名>`（注册表源）；原始的 `?type=...&host=...&password=...` URL 形式需 `ALLOW_ADHOC_CONNECTIONS=true`。SSE 端点通过 URL 参数传递数据库配置，而 Streamable HTTP 使用请求头。
 
 ### 步骤 5: 保存并测试连接
 
@@ -128,7 +125,8 @@ X-API-Key: your-secret-api-key
 
 | 请求头 | 必需 | 描述 |
 |--------|------|------|
-| `X-DB-Type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb |
+| `X-DB-Source` | 否（3.0+ 推荐） | 注册表中已配置的源名；存在时忽略其他 `X-DB-*` 连接头 |
+| `X-DB-Type` | 是 | 数据库类型：mysql、postgres、redis、oracle、dm、sqlserver、mongodb、sqlite、kingbase、gaussdb、oceanbase、tidb、clickhouse、polardb、vastbase、highgo、goldendb（legacy，需 `ALLOW_ADHOC_CONNECTIONS=true`） |
 | `X-DB-Host` | 是* | 数据库主机地址 |
 | `X-DB-Port` | 否 | 数据库端口（未指定时使用默认值） |
 | `X-DB-User` | 是* | 数据库用户名 |
@@ -144,7 +142,8 @@ X-API-Key: your-secret-api-key
 
 | 参数 | 必需 | 描述 |
 |------|------|------|
-| `type` | 是 | 数据库类型 |
+| `source` | 否（3.0+ 推荐） | 注册表中已配置的源名；存在时忽略以下其他参数 |
+| `type` | 是 | 数据库类型（legacy，需 `ALLOW_ADHOC_CONNECTIONS=true`） |
 | `host` | 是* | 数据库主机 |
 | `port` | 否 | 数据库端口 |
 | `user` | 是* | 数据库用户名 |
@@ -160,17 +159,12 @@ X-API-Key: your-secret-api-key
 **Streamable HTTP 请求头**：
 ```
 X-API-Key: your-api-key
-X-DB-Type: mysql
-X-DB-Host: mysql.example.com
-X-DB-Port: 3306
-X-DB-User: app_user
-X-DB-Password: secure_password
-X-DB-Database: production_db
+X-DB-Source: production-mysql
 ```
 
 **SSE URL**：
 ```
-https://your-server/sse?type=mysql&host=mysql.example.com&port=3306&user=app_user&password=secure_password&database=production_db
+https://your-server/sse?source=production-mysql
 ```
 
 ### PostgreSQL
@@ -178,17 +172,12 @@ https://your-server/sse?type=mysql&host=mysql.example.com&port=3306&user=app_use
 **Streamable HTTP 请求头**：
 ```
 X-API-Key: your-api-key
-X-DB-Type: postgres
-X-DB-Host: postgres.example.com
-X-DB-Port: 5432
-X-DB-User: postgres_user
-X-DB-Password: secure_password
-X-DB-Database: analytics_db
+X-DB-Source: analytics-postgres
 ```
 
 **SSE URL**：
 ```
-https://your-server/sse?type=postgres&host=postgres.example.com&port=5432&user=postgres_user&password=secure_password&database=analytics_db
+https://your-server/sse?source=analytics-postgres
 ```
 
 ### SQLite
@@ -196,13 +185,12 @@ https://your-server/sse?type=postgres&host=postgres.example.com&port=5432&user=p
 **Streamable HTTP 请求头**：
 ```
 X-API-Key: your-api-key
-X-DB-Type: sqlite
-X-DB-FilePath: /path/to/database.db
+X-DB-Source: sqlite-local
 ```
 
 **SSE URL**：
 ```
-https://your-server/sse?type=sqlite&filePath=/path/to/database.db
+https://your-server/sse?source=sqlite-local
 ```
 
 ### Redis
@@ -210,11 +198,12 @@ https://your-server/sse?type=sqlite&filePath=/path/to/database.db
 **Streamable HTTP 请求头**：
 ```
 X-API-Key: your-api-key
-X-DB-Type: redis
-X-DB-Host: redis.example.com
-X-DB-Port: 6379
-X-DB-Password: redis_password
+X-DB-Source: cache-redis
 ```
+
+> **Legacy（2.x 通道）**：`ALLOW_ADHOC_CONNECTIONS=true` 时，`X-DB-Type`/`X-DB-Host`/... 原始头与 `?type=...&host=...&password=...` URL 仍可用（2.x 行为）。不要把密码放进 URL。
+
+> **3.0+ 注册表模式**：工具集变为 `connect_datasource` / `list_datasources`（按源名切换）；`connect_database` 不暴露。
 
 ## 使用示例
 
@@ -275,7 +264,7 @@ ChatGPT：[分析结构，生成适当的 SQL，执行查询]
 
 ### 启用写操作
 
-允许 INSERT、UPDATE、DELETE 操作：
+允许 INSERT、UPDATE、DELETE 操作（仅 legacy/adhoc 通道——需 `ALLOW_ADHOC_CONNECTIONS=true`；注册表模式下写权限由服务端源的 `maxPermission` 决定）：
 
 **Streamable HTTP**：
 ```

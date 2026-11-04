@@ -41,29 +41,13 @@ jobs:
           fi
           echo "✅ Build successful"
 
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run integration tests
+        run: npm run test:integration
+
       - name: Check package files
         run: |
           echo "📦 Checking package contents..."
           npm pack --dry-run
-
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check code formatting
-        run: |
-          echo "✅ Code formatting check passed"
-          # 如果有 prettier 或 eslint，可以在这里添加
-          # npm run lint

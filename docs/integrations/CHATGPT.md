@@ -72,19 +72,16 @@ https://your-server-url/mcp
 **Headers Configuration**:
 ```
 X-API-Key: your-secret-api-key
-X-DB-Type: mysql
-X-DB-Host: your-database-host
-X-DB-Port: 3306
-X-DB-User: your-username
-X-DB-Password: your-password
-X-DB-Database: your-database-name
+X-DB-Source: finance-ro
 ```
+
+The source must be a registered datasource name (3.0 recommended; connection parameters come from the server-side registry). Legacy: with `ALLOW_ADHOC_CONNECTIONS=true` the raw `X-DB-Type`/`X-DB-Host`/... headers still work (2.x behavior).
 
 #### Option B: SSE Endpoint
 
 **Server URL**:
 ```
-https://your-server-url/sse?type=mysql&host=your-database-host&port=3306&user=your-username&password=your-password&database=your-database-name
+https://your-server-url/sse?source=finance-ro
 ```
 
 **Headers Configuration**:
@@ -92,7 +89,7 @@ https://your-server-url/sse?type=mysql&host=your-database-host&port=3306&user=yo
 X-API-Key: your-secret-api-key
 ```
 
-> **Note**: SSE endpoint passes database configuration via URL parameters, while Streamable HTTP uses headers.
+> **Note**: In 3.0+, prefer `?source=<source-name>` (a registered datasource); the raw `?type=...&host=...&password=...` URL form requires `ALLOW_ADHOC_CONNECTIONS=true`. SSE passes database configuration via URL parameters, while Streamable HTTP uses headers.
 
 ### Step 5: Save and Test Connection
 
@@ -128,7 +125,8 @@ Once connected, the following tools become available in ChatGPT:
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `X-DB-Type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb |
+| `X-DB-Source` | No (3.0+ preferred) | Registered datasource name from the server-side registry; when present, other `X-DB-*` connection headers are ignored |
+| `X-DB-Type` | Yes | Database type: mysql, postgres, redis, oracle, dm, sqlserver, mongodb, sqlite, kingbase, gaussdb, oceanbase, tidb, clickhouse, polardb, vastbase, highgo, goldendb (legacy; requires `ALLOW_ADHOC_CONNECTIONS=true`) |
 | `X-DB-Host` | Yes* | Database host address |
 | `X-DB-Port` | No | Database port (uses default if not specified) |
 | `X-DB-User` | Yes* | Database username |
@@ -144,7 +142,8 @@ Once connected, the following tools become available in ChatGPT:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `type` | Yes | Database type |
+| `source` | No (3.0+ preferred) | Registered datasource name; when present, other parameters below are ignored |
+| `type` | Yes | Database type (legacy; requires `ALLOW_ADHOC_CONNECTIONS=true`) |
 | `host` | Yes* | Database host |
 | `port` | No | Database port |
 | `user` | Yes* | Database username |
@@ -160,17 +159,12 @@ Once connected, the following tools become available in ChatGPT:
 **Streamable HTTP Headers**:
 ```
 X-API-Key: your-api-key
-X-DB-Type: mysql
-X-DB-Host: mysql.example.com
-X-DB-Port: 3306
-X-DB-User: app_user
-X-DB-Password: secure_password
-X-DB-Database: production_db
+X-DB-Source: production-mysql
 ```
 
 **SSE URL**:
 ```
-https://your-server/sse?type=mysql&host=mysql.example.com&port=3306&user=app_user&password=secure_password&database=production_db
+https://your-server/sse?source=production-mysql
 ```
 
 ### PostgreSQL
@@ -178,17 +172,12 @@ https://your-server/sse?type=mysql&host=mysql.example.com&port=3306&user=app_use
 **Streamable HTTP Headers**:
 ```
 X-API-Key: your-api-key
-X-DB-Type: postgres
-X-DB-Host: postgres.example.com
-X-DB-Port: 5432
-X-DB-User: postgres_user
-X-DB-Password: secure_password
-X-DB-Database: analytics_db
+X-DB-Source: analytics-postgres
 ```
 
 **SSE URL**:
 ```
-https://your-server/sse?type=postgres&host=postgres.example.com&port=5432&user=postgres_user&password=secure_password&database=analytics_db
+https://your-server/sse?source=analytics-postgres
 ```
 
 ### SQLite
@@ -196,13 +185,12 @@ https://your-server/sse?type=postgres&host=postgres.example.com&port=5432&user=p
 **Streamable HTTP Headers**:
 ```
 X-API-Key: your-api-key
-X-DB-Type: sqlite
-X-DB-FilePath: /path/to/database.db
+X-DB-Source: sqlite-local
 ```
 
 **SSE URL**:
 ```
-https://your-server/sse?type=sqlite&filePath=/path/to/database.db
+https://your-server/sse?source=sqlite-local
 ```
 
 ### Redis
@@ -210,11 +198,12 @@ https://your-server/sse?type=sqlite&filePath=/path/to/database.db
 **Streamable HTTP Headers**:
 ```
 X-API-Key: your-api-key
-X-DB-Type: redis
-X-DB-Host: redis.example.com
-X-DB-Port: 6379
-X-DB-Password: redis_password
+X-DB-Source: cache-redis
 ```
+
+> **Legacy (2.x channel)**: with `ALLOW_ADHOC_CONNECTIONS=true`, the raw `X-DB-Type`/`X-DB-Host`/... headers and `?type=...&host=...&password=...` URLs still work (2.x behavior). Avoid putting passwords in URLs.
+
+> **3.0+ registry mode**: the toolset changes to `connect_datasource` / `list_datasources` (switch by source name); `connect_database` is not exposed.
 
 ## Usage Examples
 
@@ -275,7 +264,7 @@ Top 5 products by sales volume this quarter:
 
 ### Enable Write Operations
 
-To allow INSERT, UPDATE, DELETE operations:
+To allow INSERT, UPDATE, DELETE operations (legacy/adhoc channel only — requires `ALLOW_ADHOC_CONNECTIONS=true`; in registry mode write access is set by the source's `maxPermission` server-side):
 
 **Streamable HTTP**:
 ```
