@@ -25,6 +25,13 @@
 - SIGHUP 热加载：配置变更动态生效 + 会话吊销（`key_revoked` / `source_removed` / `source_revoked`）
 - NDJSON 审计日志（`AUDIT_LOG_PATH`，SQL 截断 2048，失败降级不阻断）
 
+### 审查修复（3.0.0 发布前）
+
+- `ADHOC_DISABLED` 错误文案改为定位准确的中文说明（区分"有注册表但 adhoc 关闭"与"无注册表"两种场景）
+- `config_reload` 审计改为原生字段 `configSha256` / `sourceCount` / `keyCount` / `closedSessions`（不再借用 `sql` 字段承载 JSON）
+- `session_revoked` 审计补充 `reason`（吊销原因）与 `sessionId` 字段
+- MIGRATION-3.0.md 明示 legacy 模式"未配置 API_KEYS 即放行"为保留的开发行为，生产必须注册表模式或配置 `API_KEYS`
+
 ## [2.14.0] - 2026
 
 ### 新增

@@ -351,12 +351,11 @@ describe('P5 SIGHUP 热加载（用例 25-28，reload handler 直调）', () => 
       const reloads = readAudit(auditPath).filter((l) => l.event === 'config_reload');
       expect(reloads).toHaveLength(1);
       expect(reloads[0].status).toBe('ok');
-      expect(reloads[0].rows).toBe(0);
-      const detail = JSON.parse(reloads[0].sql as string) as Record<string, unknown>;
-      expect(detail.configSha256).toBe(sha256Of(cfgContent));
-      expect(detail.sourceCount).toBe(3);
-      expect(detail.keyCount).toBe(2);
-      expect(detail.closedSessions).toBe(0);
+      // native 字段（审查修复：不再用 rows/sql(JSON) 承载）
+      expect(reloads[0].closedSessions).toBe(0);
+      expect(reloads[0].configSha256).toBe(sha256Of(cfgContent));
+      expect(reloads[0].sourceCount).toBe(3);
+      expect(reloads[0].keyCount).toBe(2);
       // 无任何 session_revoked（用例 26 反向）
       expect(readAudit(auditPath).filter((l) => l.event === 'session_revoked')).toHaveLength(0);
     } finally {

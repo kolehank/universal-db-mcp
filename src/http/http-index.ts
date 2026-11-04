@@ -144,6 +144,8 @@ export async function runReload(deps: ReloadHandlerDeps): Promise<ReloadResult> 
       event: 'session_revoked',
       status: 'revoked',
       errorCode: item.reason,
+      sessionId: item.sessionId,
+      reason: item.reason,
       principal: item.principal,
       keyFingerprint: item.keyFingerprint,
       source: item.source ?? undefined,
@@ -151,8 +153,7 @@ export async function runReload(deps: ReloadHandlerDeps): Promise<ReloadResult> 
     });
   }
 
-  // 5. 审计 config_reload（config_reload 详细字段由 AuditLogger 固定字段承载：
-  //    rows=被关闭会话数；sql=JSON 明细 {configSha256, sourceCount, keyCount, closedSessions}）
+  // 5. 审计 config_reload（native 字段：configSha256 / sourceCount / keyCount / closedSessions）
   const configSha256 = sha256OfFile(configPath);
   const sourceCount = nextRegistry.sources.length;
   const keyCount = nextRegistry.apiKeys.length;
@@ -160,9 +161,10 @@ export async function runReload(deps: ReloadHandlerDeps): Promise<ReloadResult> 
     event: 'config_reload',
     status: 'ok',
     principal: 'system',
-    source: configPath,
-    rows: closedSessions,
-    sql: JSON.stringify({ configSha256, sourceCount, keyCount, closedSessions }),
+    configSha256,
+    sourceCount,
+    keyCount,
+    closedSessions,
   });
 
   console.error(`✅ SIGHUP 配置重载成功（${configPath}），关闭 ${closedSessions} 个被吊销会话`);

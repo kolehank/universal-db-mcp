@@ -58,7 +58,7 @@ const DENY_STATUS: Record<AccessDenyCode, number> = {
 
 const DENY_MESSAGE: Record<AccessDenyCode, string> = {
   INVALID_REQUEST: '缺少连接参数：请提供 source，或 type/host/port 等连接参数',
-  ADHOC_DISABLED: 'adhoc 连接已禁用：未配置数据源注册表（DATASOURCE_CONFIG），且未开启 ALLOW_ADHOC_CONNECTIONS',
+  ADHOC_DISABLED: 'adhoc 连接已禁用：请使用 X-DB-Source（或 SSE 的 source）指定已注册数据源；若确需原始连接参数，需开启 allowAdhocConnections（或环境变量 ALLOW_ADHOC_CONNECTIONS=true）并将目标地址列入 adhocTargetAllowlist',
   ADHOC_TARGET_DENIED: 'adhoc 连接目标不在允许清单（adhocTargetAllowlist）中',
   SOURCE_NOT_FOUND: '源不存在或当前 API key 无权访问',
 };

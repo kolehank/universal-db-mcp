@@ -391,12 +391,11 @@ describe('§7.1 防重入 + runReload 审计', () => {
     const reloads = lines.filter((l) => l.event === 'config_reload');
     expect(reloads).toHaveLength(1);
     expect(reloads[0].status).toBe('ok');
-    expect(reloads[0].rows).toBe(1); // 被关闭会话数
-    const detail = JSON.parse(reloads[0].sql as string) as Record<string, unknown>;
-    expect(detail.configSha256).toBe(expectedSha);
-    expect(detail.sourceCount).toBe(2);
-    expect(detail.keyCount).toBe(1);
-    expect(detail.closedSessions).toBe(1);
+    // native 字段（审查修复：不再用 rows/sql(JSON) 承载）
+    expect(reloads[0].configSha256).toBe(expectedSha);
+    expect(reloads[0].sourceCount).toBe(2);
+    expect(reloads[0].keyCount).toBe(1);
+    expect(reloads[0].closedSessions).toBe(1);
   });
 
 describe('用例 29：SIGHUP 仅在 HTTP 模式注册（stdio 不注册，保默认退出语义）', () => {

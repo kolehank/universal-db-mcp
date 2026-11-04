@@ -55,7 +55,7 @@ export interface AuditRecord {
    * 以下字段为 P6 新增的可选扩展（对既有事件零影响——仅当调用方显式提供时才出现在序列化输出中）：
    * - session_revoked：reason（吊销原因，与 errorCode 同源，native 承载）+ sessionId（被吊销会话）；
    * - config_reload：configSha256（配置文件 sha256） + sourceCount/keyCount/closedSessions（统计）。
-   * P5 目前经 rows/sql(JSON)/errorCode 映射承载；本字段供后续 emitter 直接使用，未提供时均为 undefined 省略。
+   * 自 3.0.1（审查修复）起 http-index 已直接用 native 字段落盘，不再用 rows/sql(JSON) 承载。
    */
   sessionId?: string;
   reason?: string;
