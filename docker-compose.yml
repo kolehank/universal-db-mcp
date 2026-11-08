@@ -11,7 +11,13 @@ services:
       - MODE=http
       - HTTP_PORT=3000
       - HTTP_HOST=0.0.0.0
-      - API_KEYS=${API_KEYS:-default-key-change-me}
+      - API_KEYS=${API_KEYS:-}
+      # 3.0.1 fail-closed：推荐使用注册表；legacy 模式必须设置 API_KEYS 且 ALLOW_ADHOC_CONNECTIONS=true
+      - DATASOURCE_CONFIG=${DATASOURCE_CONFIG:-}
+      - ALLOW_ADHOC_CONNECTIONS=${ALLOW_ADHOC_CONNECTIONS:-false}
+      - ADHOC_TARGET_ALLOWLIST=${ADHOC_TARGET_ALLOWLIST:-}
+      - AUDIT_LOG_PATH=${AUDIT_LOG_PATH:-}
+      - AUDIT_REQUIRED=${AUDIT_REQUIRED:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
       - LOG_LEVEL=${LOG_LEVEL:-info}

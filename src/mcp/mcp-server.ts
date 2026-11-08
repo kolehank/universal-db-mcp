@@ -472,6 +472,16 @@ export class DatabaseMCPServer {
       filePath, allowWrite, permissionMode, authSource, oracleClientPath,
     } = (args ?? {}) as Record<string, any>;
 
+    // P0-7：远程连接不允许客户端指定本地文件 / 本地动态库路径
+    // （SQLite 文件、Oracle Instant Client 只能由服务端注册表或进程启动参数指定）
+    if (this.profile === 'legacy-remote' && (filePath !== undefined || oracleClientPath !== undefined)) {
+      auditDenied(this.opts.auditLogger, 'INVALID_REQUEST', 'adhoc');
+      return toolError(
+        'INVALID_REQUEST',
+        '远程连接不允许指定 filePath / oracleClientPath。请由服务端注册表（DATASOURCE_CONFIG）配置数据源。'
+      );
+    }
+
     // 构建新配置（legacy 语义：客户端自报连接参数 + 权限模式直通）
     const newConfig: DbConfig = {
       type: normalizeDbType(type),

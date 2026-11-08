@@ -15,13 +15,13 @@ import { auditScope } from '../middleware/index.js';
 import type { RouteRuntime } from './runtime.js';
 import { getAuditContext } from '../../security/audit-context.js';
 import { classifyError } from '../../security/errors.js';
+import { auditDenied } from '../audit.js';
 
 export async function setupQueryRoutes(
   fastify: FastifyInstance,
   connectionManager: ConnectionManager,
-  // P4b：查询失败/拒绝的审计已在 DatabaseService 记录点统一写，路由层不再需要 runtime；
-  // 参数保留以与 setupRoutes 的调用形参对齐（_runtime 避免 noUnusedParameters）
-  _runtime: RouteRuntime = {}
+  // P4b：查询失败/拒绝的审计已在 DatabaseService 记录点统一写；这里只补会话归属拒绝（P0-4）
+  runtime: RouteRuntime = {}
 ): Promise<void> {
   /**
    * POST /api/query
@@ -47,10 +47,12 @@ export async function setupQueryRoutes(
       try {
         const { sessionId, query, params } = request.body;
 
-        // 会话 source 回绑审计上下文（query 时读取会话，§8.1）
-        const session = connectionManager.getSession(sessionId);
+        // 会话归属校验（P0-4）：只有创建会话的 API key 才能使用它
         const ctx = getAuditContext();
-        if (ctx && session?.source) {
+        const session = connectionManager.assertSessionAccess(sessionId, ctx?.keyFingerprint);
+
+        // 会话 source 回绑审计上下文（query 时读取会话，§8.1）
+        if (ctx && session.source) {
           ctx.source = session.source;
         }
 
@@ -79,6 +81,9 @@ export async function setupQueryRoutes(
         };
       } catch (error) {
         const { statusCode, code, message } = classifyError(error, 'QUERY_FAILED');
+        if (code === 'SESSION_NOT_FOUND') {
+          auditDenied(runtime.auditLogger, code);
+        }
         // 写权限拒绝的 denied 审计由 DatabaseService.executeQuery 记录点统一写（§8.2），此处不再重复
         // （避免同一次拒绝产生 connect/denied 多行；错误码映射保持 P1 不变：PERMISSION_DENIED → 403）
         reply.code(statusCode);
@@ -121,10 +126,12 @@ export async function setupQueryRoutes(
       try {
         const { sessionId, query, params } = request.body;
 
-        // 会话 source 回绑审计上下文（query 时读取会话，§8.1）
-        const session = connectionManager.getSession(sessionId);
+        // 会话归属校验（P0-4）：只有创建会话的 API key 才能使用它
         const ctx = getAuditContext();
-        if (ctx && session?.source) {
+        const session = connectionManager.assertSessionAccess(sessionId, ctx?.keyFingerprint);
+
+        // 会话 source 回绑审计上下文（query 时读取会话，§8.1）
+        if (ctx && session.source) {
           ctx.source = session.source;
         }
 
@@ -145,6 +152,9 @@ export async function setupQueryRoutes(
         };
       } catch (error) {
         const { statusCode, code, message } = classifyError(error, 'EXECUTE_FAILED');
+        if (code === 'SESSION_NOT_FOUND') {
+          auditDenied(runtime.auditLogger, code);
+        }
         // 写权限拒绝的 denied 审计由 DatabaseService.executeQuery 记录点统一写（§8.2），此处不再重复
         // （避免同一次拒绝产生多行 denied；错误码映射保持 P1 不变：PERMISSION_DENIED → 403）
         reply.code(statusCode);

@@ -74,7 +74,7 @@ exports.handler = async (event, context) => {
         success: false,
         error: {
           code: 'INTERNAL_ERROR',
-          message: error.message
+          message: 'Internal server error (see server logs)'
         }
       }),
     };

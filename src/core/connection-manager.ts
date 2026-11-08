@@ -13,6 +13,7 @@ import type { AuditContext } from '../security/audit-context.js';
 import { getAuditContext } from '../security/audit-context.js';
 import type { AuditLogger, AuditRecord } from '../security/audit-logger.js';
 import type { PermissionLevel } from '../security/datasource-registry.js';
+import { AclError } from '../security/errors.js';
 
 /**
  * 扩展的会话接口，包含 DatabaseService 实例
@@ -134,6 +135,21 @@ export class ConnectionManager {
 
     // 审计 event=disconnect（§8.2；best-effort）
     this.auditDisconnect(session);
+  }
+
+  /**
+   * P0-4 会话归属校验：只有创建该会话的 API key 才能继续使用/断开它。
+   * - 不存在与不属于当前 key 统一返回 404（不泄露会话是否存在）；
+   * - legacy 无 key 模式（fingerprint 为空串）只允许同为空的请求访问。
+   */
+  assertSessionAccess(sessionId: string, keyFingerprint?: string | null): Session {
+    const session = this.sessions.get(sessionId);
+    const expected = session?.keyFingerprint ?? '';
+    const actual = keyFingerprint ?? '';
+    if (!session || expected !== actual) {
+      throw new AclError('SESSION_NOT_FOUND', '会话不存在或已过期');
+    }
+    return session;
   }
 
   /**

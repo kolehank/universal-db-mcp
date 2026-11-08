@@ -35,6 +35,9 @@ import type { AppConfig } from '../../src/types/http';
 
 const FIXTURES = join(__dirname, '..', 'fixtures');
 
+/** legacy-remote 测试使用的 API key（P0-5 起 legacy 模式也必须配置 key） */
+const LEGACY_TEST_KEY = 'legacy-test-key';
+
 /** 认证失败会走到 stderr 的 logger 级别压到 error，避免测试输出噪音 */
 function baseConfig(): AppConfig {
   return {
@@ -130,7 +133,10 @@ async function makeLegacyServer(
   const dir = makeTmpDir();
   const auditPath = join(dir, 'audit.ndjson');
   const auditLogger = new AuditLogger({ auditLogPath: auditPath });
-  const server = await createHttpServer(baseConfig(), {
+  // P0-5：legacy 模式不再允许无 API key 启动，测试固定一个 key
+  const config = baseConfig();
+  config.http!.apiKeys = [LEGACY_TEST_KEY];
+  const server = await createHttpServer(config, {
     adapterFactory,
     auditLogger,
     securityEnv,
@@ -622,8 +628,8 @@ describe('P2 legacy-remote（用例 14d）', () => {
       adhocTargetAllowlist: ['10.1.2.3:3306'],
     });
     try {
-      // legacy 模式无鉴权（config.http.apiKeys 为空），principal 固定 'legacy'
-      const sessionId = await establishSession(server, '', {
+      // legacy 模式 principal 固定 'legacy'（P0-5 起必须携带 API key，否则 401）
+      const sessionId = await establishSession(server, LEGACY_TEST_KEY, {
         'X-DB-Type': 'mysql',
         'X-DB-Host': '10.1.2.3',
         'X-DB-Port': '3306',
@@ -631,7 +637,7 @@ describe('P2 legacy-remote（用例 14d）', () => {
         'X-DB-Database': 'd',
       });
 
-      const { msg } = await callTool(server, sessionId, '', 2, 'connect_database', {
+      const { msg } = await callTool(server, sessionId, LEGACY_TEST_KEY, 2, 'connect_database', {
         type: 'mysql',
         host: '10.9.9.9',
         port: 3306,

@@ -16,6 +16,7 @@ import type { DatasourceRegistry, RegistryHolder } from '../security/datasource-
 import { AuditLogger } from '../security/audit-logger.js';
 import { loadSecurityEnv } from '../utils/config-loader.js';
 import type { SecurityEnvConfig } from '../utils/config-loader.js';
+import { redactUrl } from '../utils/redact.js';
 
 /**
  * createHttpServer 注入选项（仅测试用；生产不传，走环境变量）
@@ -63,7 +64,35 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
     new AuditLogger({
       auditLogPath: securityEnv.auditLogPath,
       trustAuditUserHeader: securityEnv.trustAuditUserHeader,
+      redactSensitiveSql: securityEnv.auditRedactSql,
     });
+
+  // P0-5 fail-closed（所有入口统一，含 serverless：它们直接调用 createHttpServer）：
+  // 1) 未配置注册表时，必须至少配置 API_KEYS，否则无人能通过鉴权；
+  // 2) 未配置注册表（legacy/adhoc 模式）时，必须显式开启 ALLOW_ADHOC_CONNECTIONS，
+  //    否则客户端可任意指定连接目标。
+  const legacyApiKeys = config.http?.apiKeys ?? [];
+  if (registry === null) {
+    if (legacyApiKeys.length === 0) {
+      throw new Error(
+        '拒绝启动 HTTP 服务（fail-closed）：未配置数据源注册表（DATASOURCE_CONFIG），且 API_KEYS 为空。' +
+          '请配置 DATASOURCE_CONFIG，或至少设置 API_KEYS。'
+      );
+    }
+    if (securityEnv.allowAdhocConnections !== true) {
+      throw new Error(
+        '拒绝启动 HTTP 服务（fail-closed）：未配置数据源注册表（DATASOURCE_CONFIG），' +
+          '且未显式开启 ALLOW_ADHOC_CONNECTIONS=true。'
+      );
+    }
+  }
+
+  // P1-9：显式要求审计时，未配置审计路径直接拒绝启动（生产/等保场景）
+  if (securityEnv.auditRequired === true && !auditLogger.isEnabled) {
+    throw new Error(
+      '拒绝启动 HTTP 服务（fail-closed）：AUDIT_REQUIRED=true 但未配置 AUDIT_LOG_PATH。'
+    );
+  }
 
   // Create Fastify instance
   const fastify = Fastify({
@@ -78,6 +107,17 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
             },
           }
         : undefined,
+      // P0-6：访问日志中的 URL query 做脱敏（口令/密钥参数 → ***）
+      serializers: {
+        req(request: { method?: string; url?: string; remoteAddress?: string; remotePort?: number }) {
+          return {
+            method: request.method,
+            url: request.url ? redactUrl(request.url) : request.url,
+            remoteAddress: request.remoteAddress,
+            remotePort: request.remotePort,
+          };
+        },
+      },
     },
     requestIdHeader: 'x-request-id',
     trustProxy: true,
@@ -122,7 +162,11 @@ export async function createHttpServer(config: AppConfig, options: CreateHttpSer
   // P5：auth 经 registryView 读到当前实例（重载后新 key 立即生效 / 已删 key 立即失效）；
   // P6 收尾：TRUST_AUDIT_USER_HEADER=true 时读 X-Audit-User 头（仅审计关联，不参与授权））
   fastify.addHook('onRequest', async (request, reply) => {
-    await authMiddleware(request, reply, config, { registry: registryView, trustAuditUserHeader: securityEnv.trustAuditUserHeader });
+    await authMiddleware(request, reply, config, {
+      registry: registryView,
+      trustAuditUserHeader: securityEnv.trustAuditUserHeader,
+      auditLogger,
+    });
   });
 
   // Create connection manager（注入 mock adapter factory / 审计日志器）

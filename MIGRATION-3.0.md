@@ -87,7 +87,7 @@
 
 - stdio 的 `--type/--host/...` 与 `connect_database` 行为与 2.x **完全一致**（本地可信进程，无网络面）；
 - **legacy-remote**（无注册表 + `ALLOW_ADHOC_CONNECTIONS=true`）是唯一仍允许客户端自报连接参数与权限模式的远程通道：`permissionMode`/`allowWrite` 与 2.x 一样**直接生效**——这是打开该开关的代价。`ADHOC_TARGET_ALLOWLIST` 可限定出站目标 `host:port`，但**无法**限制客户端声明的权限；
-- **legacy 且未配置 `API_KEYS` 时保留 2.x 的开发模式（无 key 即放行）**——评审确认的保留决策，仅限本地开发。任何远程/生产部署必须配置 `API_KEYS` 或使用注册表模式，否则等价于零鉴权；
+- **legacy 模式必须配置 `API_KEYS`（3.0.1 起）**：2.x 的「未配置 key 即放行」开发模式已移除。无注册表时必须同时设置 `API_KEYS` 与 `ALLOW_ADHOC_CONNECTIONS=true`，否则 `createHttpServer` 直接拒绝启动（serverless 入口同样生效）；
 - **生产环境必须用注册表模式**。legacy-remote 只适合迁移期/可信内网临时使用，且迁移窗口应尽快收窄；
 - 迁移不彻底（长期保留 adhoc 打开）意味着：任何拿到合法 key 的客户端仍可自报连接参数探内网（SSRF 面），与 3.0 "按源白名单 + 服务端权威权限" 的设计目标相悖。请按 §2.5/§2.6 流程尽快关闭。
 

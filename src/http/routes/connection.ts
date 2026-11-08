@@ -94,7 +94,11 @@ function buildSourceDbConfig(def: DatasourceDef, effective: PermissionLevel): Db
   };
 }
 
-/** legacy/adhoc 路径：客户端连接参数直通（§9 legacy-remote 语义：2.x 行为） */
+/**
+ * legacy/adhoc 路径：客户端连接参数直通（§9 legacy-remote 语义：2.x 行为）。
+ * P0-6/7：filePath（SQLite 本地文件）与 oracleClientPath（本地动态库）**不接受客户端输入**，
+ * 只能由服务端注册表（DATASOURCE_CONFIG）或启动参数指定。
+ */
 function buildAdhocDbConfig(body: ConnectRequest): DbConfig {
   return {
     type: (body.type ?? '') as DbConfig['type'],
@@ -103,9 +107,7 @@ function buildAdhocDbConfig(body: ConnectRequest): DbConfig {
     ...(body.user !== undefined ? { user: body.user } : {}),
     ...(body.password !== undefined ? { password: body.password } : {}),
     ...(body.database !== undefined ? { database: body.database } : {}),
-    ...(body.filePath !== undefined ? { filePath: body.filePath } : {}),
     ...(body.authSource !== undefined ? { authSource: body.authSource } : {}),
-    ...(body.oracleClientPath !== undefined ? { oracleClientPath: body.oracleClientPath } : {}),
     ...(body.allowWrite !== undefined ? { allowWrite: body.allowWrite } : {}),
     ...(body.permissionMode !== undefined ? { permissionMode: body.permissionMode as DbConfig['permissionMode'] } : {}),
     ...(body.permissions !== undefined ? { permissions: body.permissions as PermissionType[] } : {}),
@@ -174,6 +176,22 @@ export async function setupConnectionRoutes(
         const securityEnv = runtime.securityEnv ?? {};
         const apiKey = (request as { apiKey?: string }).apiKey;
         const keyDef = registry && apiKey ? registry.findKey(apiKey) : undefined;
+
+        // P0-7：本地文件/本地动态库路径只能来自注册表或启动参数，客户端提交一律拒绝
+        if (!body.source && (body.filePath !== undefined || body.oracleClientPath !== undefined)) {
+          auditDenied(runtime.auditLogger, 'INVALID_REQUEST', 'adhoc');
+          reply.code(400);
+          return {
+            success: false,
+            error: {
+              code: 'INVALID_REQUEST',
+              message:
+                '客户端不允许指定 filePath / oracleClientPath。' +
+                'SQLite 数据库文件和 Oracle Client 路径只能由服务端注册表（DATASOURCE_CONFIG）或启动参数配置。',
+            },
+            metadata: errMeta(),
+          };
+        }
 
         // adhoc 开关与目标白名单（§3.1：env ALLOW_ADHOC_CONNECTIONS 覆盖注册表字段；白名单文件优先，评审 §4-5）
         const adhocEnabled = registry
@@ -322,6 +340,10 @@ export async function setupConnectionRoutes(
       try {
         const { sessionId } = request.body;
 
+        // 会话归属校验（P0-4）：只有创建会话的 API key 才能断开它
+        const ctx = getAuditContext();
+        connectionManager.assertSessionAccess(sessionId, ctx?.keyFingerprint);
+
         // Disconnect from database（内含 event=disconnect 审计，用会话记录的 principal/source）
         await connectionManager.disconnect(sessionId);
 
@@ -337,6 +359,9 @@ export async function setupConnectionRoutes(
         };
       } catch (error) {
         const { statusCode, code, message } = classifyError(error, 'DISCONNECTION_FAILED');
+        if (code === 'SESSION_NOT_FOUND') {
+          auditDenied(runtime.auditLogger, code);
+        }
         reply.code(statusCode);
         return {
           success: false,

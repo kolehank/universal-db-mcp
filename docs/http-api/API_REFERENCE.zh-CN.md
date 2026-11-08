@@ -12,7 +12,7 @@ Universal Database MCP Server HTTP API 提供 RESTful 端点和 MCP 协议端点
 
 除 `/api/health` 和 `/api/info` 外，所有端点（包括 REST API 和 MCP SSE/Streamable HTTP 端点）都需要 API Key 认证。
 
-> **注意**: 如果未配置 `API_KEYS` 环境变量，则跳过认证（开发模式）。
+> **注意**: 3.0.1 起不再有「未配置 `API_KEYS` 即跳过认证」的开发模式。未配置注册表时，必须同时设置 `API_KEYS` 与 `ALLOW_ADHOC_CONNECTIONS=true`，否则服务拒绝启动；未配置 API Key 的请求一律拒绝。
 
 ### 认证方式
 

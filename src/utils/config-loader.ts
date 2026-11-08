@@ -151,6 +151,10 @@ export interface SecurityEnvConfig {
   auditLogPath?: string;
   /** TRUST_AUDIT_USER_HEADER：true 时把 X-Audit-User 记入审计（仅审计关联，不参与授权） */
   trustAuditUserHeader?: boolean;
+  /** AUDIT_REQUIRED：true 时未配置 AUDIT_LOG_PATH 直接拒绝启动（P1-9） */
+  auditRequired?: boolean;
+  /** AUDIT_REDACT_SQL：true 时审计前对口令类字面量脱敏（默认 true；P1-10） */
+  auditRedactSql?: boolean;
 }
 
 /**
@@ -182,6 +186,13 @@ export function loadSecurityEnv(): SecurityEnvConfig {
   if (process.env.TRUST_AUDIT_USER_HEADER !== undefined) {
     config.trustAuditUserHeader = process.env.TRUST_AUDIT_USER_HEADER === 'true';
   }
+
+  if (process.env.AUDIT_REQUIRED !== undefined) {
+    config.auditRequired = process.env.AUDIT_REQUIRED === 'true';
+  }
+
+  // 默认脱敏；只有显式 AUDIT_REDACT_SQL=false 才关闭
+  config.auditRedactSql = process.env.AUDIT_REDACT_SQL !== 'false';
 
   return config;
 }

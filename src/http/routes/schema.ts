@@ -410,11 +410,11 @@ export async function setupSchemaRoutes(
   });
 }
 
-/** 会话 source 回绑审计上下文（§8.1「切源后不得沿用旧值」） */
+/** 会话 source 回绑审计上下文（§8.1「切源后不得沿用旧值」）；同时做会话归属校验（P0-4） */
 function rebindSessionSource(connectionManager: ConnectionManager, sessionId: string): void {
-  const session = connectionManager.getSession(sessionId);
   const ctx = getAuditContext();
-  if (ctx && session?.source) {
+  const session = connectionManager.assertSessionAccess(sessionId, ctx?.keyFingerprint);
+  if (ctx && session.source) {
     ctx.source = session.source;
   }
 }
@@ -429,7 +429,7 @@ function sendSchemaError<T>(
   requestId: string
 ): ApiResponse<T> {
   const { statusCode, code, message } = classifyError(error, fallbackCode);
-  if (code === 'PERMISSION_DENIED') {
+  if (code === 'PERMISSION_DENIED' || code === 'SESSION_NOT_FOUND') {
     auditDenied(runtime.auditLogger, code);
   }
   reply.code(statusCode);

@@ -2,6 +2,27 @@
 
 本文档记录 Universal DB MCP 的版本更新历史。
 
+## [3.0.1] - 2026-11-06
+
+### 安全修复
+
+- **只读模式强制生效（P0）**：`safe` / 仅 `read` 权限不再只按首个关键字判断（旧实现可被 `WITH ... DELETE`、`EXPLAIN ANALYZE DELETE`、`SELECT ... INTO OUTFILE`、`CALL`、`MERGE`、`/*!...*/`、多语句等绕过）。现在先做词法归一化（去除字符串/注释/标识符，保留 MySQL 可执行注释内容），再按语句拆分逐条校验；只读模式对首关键字做白名单，并拦截 `SELECT ... INTO`、`FOR UPDATE`、危险函数（`pg_read_file` / `load_file` / `utl_file` / `xp_cmdshell` 等），同时禁止 `SET`/`RESET`（防止关闭会话级只读）。非只读模式也逐条校验，多语句无法绕过权限。
+- **数据库侧只读（纵深防御）**：只读配置下，MySQL 系使用 `SET SESSION TRANSACTION READ ONLY`，PostgreSQL 系使用 `default_transaction_read_only=on`，SQLite 使用 `PRAGMA query_only`，ClickHouse 使用 `readonly=1`，Oracle 使用 `SET TRANSACTION READ ONLY`，达梦尽力而为；即使 SQL 文本校验被绕过，写操作也会被数据库拒绝。
+- **Redis 命令权限（P0）**：新增命令级策略（`src/utils/redis-command-policy.ts`）。只读模式仅允许纯读命令白名单；`SET`/`DEL`/`FLUSHALL`/`CONFIG`/`EVAL`/`MODULE`/`SLAVEOF`/`SHUTDOWN` 等按 insert/update/delete/ddl 分类校验；未知命令仅在 full 模式放行。修复旧实现只读模式下可执行任意 Redis 命令的问题。
+- **MongoDB 操作级权限（P0）**：新增 `src/utils/mongo-command-policy.ts`，按 `find/insert/update/delete/ddl` 分类校验；`aggregate` 中的 `$out` 需要 delete、`$merge` 需要 update；`$where` / `$function` / `$accumulator` 等服务器端脚本只有 full（ddl）放行。策略在 `validateQuery` 与适配器内各执行一次。
+- **会话归属校验（P0）**：REST（`/api/query`、`/api/execute`、`/api/schema*`、`/api/tables`、`/api/cache*`、`/api/enum-values`、`/api/sample-data`、`/api/disconnect`）与 MCP（SSE `/sse/message`、Streamable `POST/GET/DELETE /mcp`）均校验 sessionId 是否属于当前 API key。不属于当前 key 或不存在统一返回 404（不泄露会话存在性）。
+- **鉴权 fail-closed（P0）**：删除 legacy 模式「未配置 API_KEYS 即放行」后门；无注册表且无 API_KEYS 时 `createHttpServer` 直接拒绝启动（serverless 入口同样生效）。无注册表时还要求显式 `ALLOW_ADHOC_CONNECTIONS=true`。
+- **凭据不出 URL、日志脱敏（P0）**：SSE `/sse` 拒绝 URL query 中的 `password`（改用 `X-DB-Password` 或注册表源）；HTTP 访问日志对 `password`/`token`/`api_key`/`x-db-password` 等 query 参数脱敏。
+- **本地路径只走服务端配置（P0）**：REST / SSE / Streamable / 远程 `connect_database` 不再接受客户端提交的 `filePath` / `oracleClientPath`；SQLite 额外禁止 `ATTACH` / `DETACH`。路径只能由注册表（`DATASOURCE_CONFIG`）或启动参数指定。
+- **审计补齐（P1）**：401/403 鉴权失败写入 `event=denied`（只记 keyFingerprint）；新增 `AUDIT_REQUIRED=true`（未配置 `AUDIT_LOG_PATH` 拒绝启动）；审计文件以 0600 打开；SQL 审计默认对口令类字面量脱敏（`AUDIT_REDACT_SQL=false` 可关闭）。
+
+### 注意
+
+- 只读模式现在会拒绝 `SET`、`BEGIN`/`COMMIT`、`SELECT ... INTO`、`FOR UPDATE` 以及多语句中的写操作，属于预期收紧。
+- legacy（无注册表）模式不再允许无 API key 启动；无注册表时必须同时设置 `API_KEYS` 与 `ALLOW_ADHOC_CONNECTIONS=true`。
+- 客户端不能再通过 adhoc 方式指定 SQLite `filePath` 或 Oracle `oracleClientPath`；请改用注册表数据源。
+- 审计 SQL 默认对口令类字面量（`IDENTIFIED BY`、`password=...` 等）脱敏；需要原文审计时设置 `AUDIT_REDACT_SQL=false`。
+
 ## [3.0.0] - 2026-11-04
 
 ### 破坏性变更

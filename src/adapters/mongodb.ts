@@ -13,7 +13,10 @@ import type {
   SchemaInfo,
   TableInfo,
   ColumnInfo,
+  PermissionType,
 } from '../types/adapter.js';
+import { decideMongoOperation, parseMongoQuery } from '../utils/mongo-command-policy.js';
+import type { ParsedMongoQuery } from '../utils/mongo-command-policy.js';
 
 export class MongoDBAdapter implements DbAdapter {
   private client: MongoClient | null = null;
@@ -25,6 +28,8 @@ export class MongoDBAdapter implements DbAdapter {
     password?: string;
     database?: string;
     authSource?: string;
+    /** 会话权限（P0-3：MongoDB 无会话级只读，按操作类型在适配器内强制） */
+    permissions?: PermissionType[];
   };
 
   constructor(config: {
@@ -34,6 +39,7 @@ export class MongoDBAdapter implements DbAdapter {
     password?: string;
     database?: string;
     authSource?: string;
+    permissions?: PermissionType[];
   }) {
     this.config = config;
   }
@@ -115,6 +121,12 @@ export class MongoDBAdapter implements DbAdapter {
       // 解析查询
       const parsedQuery = this.parseQuery(query);
 
+      // P0-3 纵深防御：按操作类型强制权限（safety.validateQuery 已在执行前拦一次）
+      const decision = decideMongoOperation(parsedQuery, this.config.permissions ?? ['read']);
+      if (!decision.allowed) {
+        throw new Error(decision.reason ?? '操作被拒绝：当前权限不允许该 MongoDB 操作');
+      }
+
       // 执行操作
       const result = await this.executeOperation(parsedQuery);
       const executionTime = Date.now() - startTime;
@@ -136,118 +148,76 @@ export class MongoDBAdapter implements DbAdapter {
   }
 
   /**
-   * 解析查询字符串
+   * 解析查询字符串（解析逻辑统一在 mongo-command-policy，策略与适配器共用同一实现）
    */
-  private parseQuery(query: string): {
-    collection: string;
-    operation: string;
-    query?: Document;
-    update?: Document;
-    pipeline?: Document[];
-    options?: Document;
-  } {
-    const trimmed = query.trim();
-
-    // 尝试解析 JSON 格式
-    if (trimmed.startsWith('{')) {
-      try {
-        return JSON.parse(trimmed);
-      } catch (error) {
-        throw new Error('无效的 JSON 查询格式');
-      }
-    }
-
-    // 解析 db.collection.operation() 格式
-    const match = trimmed.match(/db\.(\w+)\.(\w+)\((.*)\)/s);
-    if (match) {
-      const [, collection, operation, argsStr] = match;
-
-      let args: Document = {};
-      if (argsStr.trim()) {
-        try {
-          args = JSON.parse(argsStr);
-        } catch (error) {
-          throw new Error('无效的查询参数格式');
-        }
-      }
-
-      return {
-        collection,
-        operation,
-        query: args,
-      };
-    }
-
-    throw new Error('不支持的查询格式。请使用 JSON 格式或 db.collection.operation() 格式');
+  private parseQuery(query: string): ParsedMongoQuery {
+    return parseMongoQuery(query);
   }
 
   /**
    * 执行 MongoDB 操作
    */
-  private async executeOperation(parsed: {
-    collection: string;
-    operation: string;
-    query?: Document;
-    update?: Document;
-    pipeline?: Document[];
-    options?: Document;
-  }): Promise<Document[]> {
+  private async executeOperation(parsed: ParsedMongoQuery): Promise<Document[]> {
     if (!this.db) {
       throw new Error('数据库未连接');
     }
 
     const collection = this.db.collection(parsed.collection);
     const operation = parsed.operation.toLowerCase();
+    const query = parsed.query as Document | undefined;
+    const update = parsed.update as Document | undefined;
+    const pipeline = parsed.pipeline as Document[] | undefined;
+    const options = parsed.options as Document | undefined;
 
     switch (operation) {
       case 'find': {
-        const cursor = collection.find(parsed.query || {}, parsed.options);
+        const cursor = collection.find(query || {}, options);
         const results = await cursor.toArray();
         return results.map(doc => this.formatDocument(doc));
       }
 
       case 'findone': {
-        const result = await collection.findOne(parsed.query || {}, parsed.options);
+        const result = await collection.findOne(query || {}, options);
         return result ? [this.formatDocument(result)] : [];
       }
 
       case 'count':
       case 'countdocuments': {
-        const count = await collection.countDocuments(parsed.query || {});
+        const count = await collection.countDocuments(query || {});
         return [{ count }];
       }
 
       case 'distinct': {
-        if (!parsed.options?.field) {
+        if (!options?.field) {
           throw new Error('distinct 操作需要指定 field 参数');
         }
-        const values = await collection.distinct(parsed.options.field, parsed.query || {});
+        const values = await collection.distinct(options.field, query || {});
         return values.map((value, index) => ({ index, value }));
       }
 
       case 'aggregate': {
-        if (!parsed.pipeline) {
+        if (!pipeline) {
           throw new Error('aggregate 操作需要指定 pipeline 参数');
         }
-        const cursor = collection.aggregate(parsed.pipeline);
+        const cursor = collection.aggregate(pipeline);
         const results = await cursor.toArray();
         return results.map(doc => this.formatDocument(doc));
       }
 
       case 'insert':
       case 'insertone': {
-        if (!parsed.query) {
+        if (!query) {
           throw new Error('insert 操作需要指定文档数据');
         }
-        const result = await collection.insertOne(parsed.query);
+        const result = await collection.insertOne(query);
         return [{ insertedId: result.insertedId.toString(), acknowledged: result.acknowledged }];
       }
 
       case 'insertmany': {
-        if (!parsed.query || !Array.isArray(parsed.query)) {
+        if (!query || !Array.isArray(query)) {
           throw new Error('insertMany 操作需要指定文档数组');
         }
-        const result = await collection.insertMany(parsed.query);
+        const result = await collection.insertMany(query as Document[]);
         return [{
           insertedCount: result.insertedCount,
           insertedIds: Object.values(result.insertedIds).map(id => id.toString()),
@@ -257,10 +227,10 @@ export class MongoDBAdapter implements DbAdapter {
 
       case 'update':
       case 'updateone': {
-        if (!parsed.query || !parsed.update) {
+        if (!query || !update) {
           throw new Error('update 操作需要指定 query 和 update 参数');
         }
-        const result = await collection.updateOne(parsed.query, parsed.update);
+        const result = await collection.updateOne(query, update);
         return [{
           matchedCount: result.matchedCount,
           modifiedCount: result.modifiedCount,
@@ -269,10 +239,10 @@ export class MongoDBAdapter implements DbAdapter {
       }
 
       case 'updatemany': {
-        if (!parsed.query || !parsed.update) {
+        if (!query || !update) {
           throw new Error('updateMany 操作需要指定 query 和 update 参数');
         }
-        const result = await collection.updateMany(parsed.query, parsed.update);
+        const result = await collection.updateMany(query, update);
         return [{
           matchedCount: result.matchedCount,
           modifiedCount: result.modifiedCount,
@@ -282,10 +252,10 @@ export class MongoDBAdapter implements DbAdapter {
 
       case 'delete':
       case 'deleteone': {
-        if (!parsed.query) {
+        if (!query) {
           throw new Error('delete 操作需要指定查询条件');
         }
-        const result = await collection.deleteOne(parsed.query);
+        const result = await collection.deleteOne(query);
         return [{
           deletedCount: result.deletedCount,
           acknowledged: result.acknowledged,
@@ -293,10 +263,10 @@ export class MongoDBAdapter implements DbAdapter {
       }
 
       case 'deletemany': {
-        if (!parsed.query) {
+        if (!query) {
           throw new Error('deleteMany 操作需要指定查询条件');
         }
-        const result = await collection.deleteMany(parsed.query);
+        const result = await collection.deleteMany(query);
         return [{
           deletedCount: result.deletedCount,
           acknowledged: result.acknowledged,

@@ -611,11 +611,12 @@ export class DatabaseService {
   }
 
   /**
-   * SQL 审计字段：按 §8.2 截断 2048 字符（有 logger 时复用 logger.truncateSql，保持单实现源）。
+   * SQL 审计字段：先按 P1-10 脱敏口令类字面量，再按 §8.2 截断 2048 字符
+   * （有 logger 时复用 logger.prepareSql，保持单实现源）。
    */
   private sqlInfo(sql: string): { sql: string; sqlBytes: number; sqlTruncated: boolean } {
     if (this.auditLogger) {
-      return this.auditLogger.truncateSql(sql);
+      return this.auditLogger.prepareSql(sql);
     }
     const truncated = sql.length > MAX_SQL_LENGTH ? sql.slice(0, MAX_SQL_LENGTH) : sql;
     return {

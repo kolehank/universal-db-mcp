@@ -12,8 +12,9 @@
  * - keyFingerprint 由调用方提供（sha256(key) 前 12 位）；本模块不接收、不记录明文 key（评审裁决 7）。
  */
 
-import { openSync, writeSync, closeSync } from 'node:fs';
+import { openSync, writeSync, closeSync, fchmodSync } from 'node:fs';
 import type { AuditContext } from './audit-context.js';
+import { redactSecretsInSql } from '../utils/redact.js';
 
 /** SQL 截断长度（字符），规格 §8.2 */
 export const MAX_SQL_LENGTH = 2048;
@@ -72,6 +73,8 @@ export interface AuditLoggerOptions {
   trustAuditUserHeader?: boolean;
   /** 错误/WARN 出口；缺省走 stderr（console.error） */
   logError?: (msg: string) => void;
+  /** 审计前对口令类 SQL 字面量脱敏（默认 true；P1-10） */
+  redactSensitiveSql?: boolean;
 }
 
 export interface SqlTruncationInfo {
@@ -86,6 +89,7 @@ export class AuditLogger {
   readonly auditLogPath: string | undefined;
 
   private readonly trustAuditUserHeader: boolean;
+  private readonly redactSensitiveSql: boolean;
   private readonly logError?: (msg: string) => void;
   private readonly enabled: boolean;
   private fd: number | null = null;
@@ -94,6 +98,7 @@ export class AuditLogger {
   constructor(options: AuditLoggerOptions = {}) {
     this.auditLogPath = options.auditLogPath;
     this.trustAuditUserHeader = options.trustAuditUserHeader === true;
+    this.redactSensitiveSql = options.redactSensitiveSql !== false;
     this.logError = options.logError;
     this.enabled = typeof options.auditLogPath === 'string' && options.auditLogPath.length > 0;
     if (!this.enabled) {
@@ -125,6 +130,14 @@ export class AuditLogger {
       sqlBytes: Buffer.byteLength(truncated, 'utf8'),
       sqlTruncated: truncated.length < sql.length,
     };
+  }
+
+  /**
+   * 审计入库前的 SQL 处理（P1-10）：先对明显的口令/密钥字面量脱敏，再截断。
+   * 与 truncateSql 分开，保证需要原文的调用方仍可直接使用 truncateSql。
+   */
+  prepareSql(sql: string): SqlTruncationInfo {
+    return this.truncateSql(this.redactSensitiveSql ? redactSecretsInSql(sql) : sql);
   }
 
   /**
@@ -229,7 +242,14 @@ export class AuditLogger {
 
   /** 打开审计日志文件（append 模式）。父目录不存在或路径不可写会抛错 → 由 write() 降级处理。 */
   protected openFile(path: string): number {
-    return openSync(path, 'a');
+    // P1-10：新建文件默认 0600（仅属主可读写），并尽力修正已存在文件的权限
+    const fd = openSync(path, 'a', 0o600);
+    try {
+      fchmodSync(fd, 0o600);
+    } catch {
+      // Windows / 特殊文件系统可能不支持，best-effort
+    }
+    return fd;
   }
 
   /** 追加一行到文件。 */

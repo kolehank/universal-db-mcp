@@ -293,3 +293,63 @@ MCP 使用参数化查询，已内置 SQL 注入防护。但仍需注意：
 1. 始终配置 API Key
 2. 使用 HTTPS
 3. 限制网络访问
+
+## 3.0.1 安全加固（政务云/等保场景建议）
+
+### 数据库账号最小权限
+
+代码层的只读/权限校验是纵深防御，**主防线仍是数据库账号本身**。注册表 `DATASOURCE_CONFIG` 中每个源应使用独立的只读账号或最小权限账号：
+
+```sql
+-- MySQL / MariaDB / TiDB / OceanBase / PolarDB / GoldenDB
+CREATE USER 'mcp_ro'@'%' IDENTIFIED BY '<strong-password>';
+GRANT SELECT, SHOW VIEW ON app_db.* TO 'mcp_ro'@'%';
+
+-- PostgreSQL / KingbaseES / GaussDB / Vastbase / HighGo
+CREATE ROLE mcp_ro LOGIN PASSWORD '<strong-password>';
+GRANT CONNECT ON DATABASE app_db TO mcp_ro;
+GRANT USAGE ON SCHEMA public TO mcp_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_ro;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mcp_ro;
+
+-- Oracle / 达梦：仅授予 CREATE SESSION 与目标对象的 SELECT
+GRANT CREATE SESSION TO mcp_ro;
+GRANT SELECT ON app_schema.orders TO mcp_ro;
+
+-- SQL Server：db_datareader 或显式 SELECT
+ALTER ROLE db_datareader ADD MEMBER mcp_ro;
+```
+
+Redis 建议使用 ACL 限定只读命令：
+
+```text
+ACL SETUSER mcp_ro on ><strong-password> ~* +@read -@write -@dangerous
+```
+
+MongoDB 建议使用 `read` 内置角色；读写场景再按集合授予 `readWrite`，不要使用 `root`/`dbAdmin`。
+
+只读会话还会在数据库侧强制只读（MySQL `SET SESSION TRANSACTION READ ONLY`、PostgreSQL `default_transaction_read_only=on`、SQLite `query_only`、ClickHouse `readonly=1` 等），账号权限与代码校验应同时收紧。
+
+### 启动与鉴权（fail-closed）
+
+- HTTP 模式必须配置 `DATASOURCE_CONFIG` 注册表；确需 legacy 模式时，必须同时设置 `API_KEYS` 和 `ALLOW_ADHOC_CONNECTIONS=true`。
+- 未配置 API Key 时服务拒绝启动/拒绝请求，不再存在开发模式放行。
+- 会话（REST sessionId / MCP sessionId）与创建它的 API Key 绑定，其他 Key 无法查询或断开。
+
+### 凭据与本地文件
+
+- 数据库口令不要放在 URL query 中；SSE 连接请使用 `X-DB-Password` 请求头或注册表源（URL 中的 `password` 会被拒绝）。
+- 访问日志会自动脱敏 `password` / `token` / `api_key` 等 query 参数。
+- SQLite `filePath`、Oracle `oracleClientPath` 只能由注册表或启动参数指定，客户端提交会被拒绝；SQLite 禁止 `ATTACH` / `DETACH`。
+
+### 审计
+
+```bash
+AUDIT_LOG_PATH=/var/log/universal-db-mcp/audit.ndjson
+AUDIT_REQUIRED=true          # 未配置审计路径则拒绝启动
+AUDIT_REDACT_SQL=true        # 默认：口令类 SQL 字面量脱敏
+```
+
+- 审计文件以 `0600` 权限创建，建议配合 logrotate 或日志采集系统做异地留存。
+- 鉴权失败（401/403）同样写入 `event=denied`；审计记录只包含 `keyFingerprint`，不含明文 API Key。
+- 需要完整 SQL 原文用于取证时，可设置 `AUDIT_REDACT_SQL=false`，并确保审计文件访问权限受控。

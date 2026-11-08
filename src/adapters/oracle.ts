@@ -31,6 +31,8 @@ export class OracleAdapter implements DbAdapter {
     sid?: string;
     connectString?: string;
     oracleClientPath?: string;
+    /** 只读配置：每次执行前开启只读事务（SET TRANSACTION READ ONLY） */
+    readOnly?: boolean;
   };
   private static thickModeInitialized = false;
 
@@ -44,6 +46,8 @@ export class OracleAdapter implements DbAdapter {
     sid?: string;
     connectString?: string;
     oracleClientPath?: string;
+    /** 只读配置：每次执行前开启只读事务（SET TRANSACTION READ ONLY） */
+    readOnly?: boolean;
   }) {
     this.config = config;
 
@@ -151,6 +155,17 @@ export class OracleAdapter implements DbAdapter {
       return await this.withRetry(() => this.withConnection(async (connection) => {
         let cleanQuery = query.trim();
         if (cleanQuery.endsWith(';')) cleanQuery = cleanQuery.slice(0, -1).trim();
+
+        // 只读配置：先结束旧事务，再开启只读事务（数据库侧强制，DDL/DML 会直接报错）
+        if (this.config.readOnly) {
+          try {
+            await connection.rollback();
+          } catch {
+            // 没有活动事务时 rollback 可能报错，忽略
+          }
+          await connection.execute('SET TRANSACTION READ ONLY');
+        }
+
         const result = await connection.execute(cleanQuery, params || [], { autoCommit: false, outFormat: oracledb.OUT_FORMAT_OBJECT });
         const executionTime = Date.now() - startTime;
         if (result.rows && result.rows.length > 0) {

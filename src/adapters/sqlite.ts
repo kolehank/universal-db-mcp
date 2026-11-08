@@ -42,6 +42,11 @@ export class SQLiteAdapter implements DbAdapter {
 
       // 启用外键约束
       this.db.pragma('foreign_keys = ON');
+
+      // 只读配置：数据库侧强制只读（连 ATTACH 出来的库也拒绝写入）
+      if (this.config.readonly) {
+        this.db.pragma('query_only = ON');
+      }
     } catch (error) {
       throw new Error(
         `SQLite 连接失败: ${error instanceof Error ? error.message : String(error)}`

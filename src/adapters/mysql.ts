@@ -21,12 +21,16 @@ import { isWriteOperation as checkWriteOperation } from '../utils/safety.js';
 
 export class MySQLAdapter implements DbAdapter {
   private pool: mysql.Pool | null = null;
+  /** 已设置过只读会话的物理连接（避免每次查询重复 SET） */
+  private readonly roPrepared = new WeakSet<object>();
   private config: {
     host: string;
     port: number;
     user?: string;
     password?: string;
     database?: string;
+    /** 只读配置：会话级强制只读（SET SESSION TRANSACTION READ ONLY） */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -35,6 +39,7 @@ export class MySQLAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }
@@ -113,7 +118,7 @@ export class MySQLAdapter implements DbAdapter {
     const startTime = Date.now();
 
     try {
-      const [rows, fields] = await this.withRetry(() => this.pool!.execute(query, params));
+      const [rows, fields] = await this.withRetry(() => this.executeWithReadOnlyGuard(query, params));
       const executionTime = Date.now() - startTime;
 
       // 处理不同类型的查询结果
@@ -142,6 +147,26 @@ export class MySQLAdapter implements DbAdapter {
       throw new Error(
         `查询执行失败: ${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  }
+
+  /**
+   * 只读配置下，每个物理连接首次使用时设置 SESSION TRANSACTION READ ONLY。
+   * 这是数据库侧强制（即使 SQL 文本校验被绕过也无法写入），随后再执行用户查询。
+   */
+  private async executeWithReadOnlyGuard(
+    query: string,
+    params?: unknown[]
+  ): Promise<[any, any]> {
+    const conn = await this.pool!.getConnection();
+    try {
+      if (this.config.readOnly && !this.roPrepared.has(conn)) {
+        await conn.query('SET SESSION TRANSACTION READ ONLY');
+        this.roPrepared.add(conn);
+      }
+      return await conn.execute(query, params);
+    } finally {
+      conn.release();
     }
   }
 

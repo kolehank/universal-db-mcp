@@ -27,6 +27,7 @@ import { createAdapter } from '../../utils/adapter-factory.js';
 import { auditDenied, auditPermissionIgnored } from '../audit.js';
 import { auditScope } from '../middleware/index.js';
 import { getAuditContext } from '../../security/audit-context.js';
+import type { AuditContext } from '../../security/audit-context.js';
 import { decideAccess, keyFingerprint, resolveEffectivePermission } from '../../security/datasource-registry.js';
 import type { AccessDenyCode, ApiKeyDef, DatasourceDef, DatasourceRegistry, PermissionLevel } from '../../security/datasource-registry.js';
 import { resolvePermissions } from '../../utils/safety.js';
@@ -121,11 +122,10 @@ function parseDbConfigFromQuery(query: Record<string, unknown>): DbConfig | null
     user: query.user as string,
     password: query.password as string,
     database: query.database as string,
-    filePath: query.filePath as string,
+    // P0-7：filePath / oracleClientPath 只允许来自服务端注册表，不再从 query 读取
     allowWrite: query.allowWrite === 'true',
     permissionMode: query.permissionMode as PermissionMode,
     permissions,
-    oracleClientPath: query.oracleClientPath as string,
   };
 }
 
@@ -146,11 +146,10 @@ function buildAdhocDbConfigFromHeaders(headers: Record<string, unknown>): DbConf
     user: headers['x-db-user'] as string,
     password: headers['x-db-password'] as string,
     database: headers['x-db-database'] as string,
-    filePath: headers['x-db-filepath'] as string,
+    // P0-7：filePath / oracleClientPath 只允许来自服务端注册表，不再从请求头读取
     allowWrite: headers['x-db-allow-write'] === 'true',
     permissionMode: headers['x-db-permission-mode'] as PermissionMode,
     permissions: permissionsHeader ? permissionsHeader.split(',').map(p => p.trim()) as PermissionType[] : undefined,
-    oracleClientPath: headers['x-db-oracle-client-path'] as string,
   };
 }
 
@@ -297,6 +296,23 @@ function syncMcpSessionFromServer(sessionId: string, mcpServer: DatabaseMCPServe
   }
 }
 
+/** 取本次 HTTP 请求由 auth 中间件挂载的审计上下文（不依赖 auditScope 作用域） */
+function requestAuditCtx(request: FastifyRequest): AuditContext | undefined {
+  return (request as { auditCtx?: AuditContext }).auditCtx;
+}
+
+/**
+ * P0-4 会话归属校验：MCP 会话只能由创建它的 API key 使用。
+ * 不存在的会话与不属于当前 key 的会话返回同一结果（避免枚举会话）。
+ */
+function isMcpSessionOwnedBy(sessionId: string, ctx: AuditContext | undefined): boolean {
+  const meta = mcpSessionMeta.get(sessionId);
+  if (!meta) {
+    return false;
+  }
+  return meta.keyFingerprint === (ctx?.keyFingerprint ?? '');
+}
+
 /** 创建远程 MCP 服务器（registry 或 legacy，均经注入的 adapterFactory 建连） */
 async function createRemoteMcpServer(options: {
   config: DbConfig;
@@ -369,6 +385,33 @@ export async function setupMcpSseRoutes(
       const query = request.query as Record<string, unknown>;
       const source =
         typeof query.source === 'string' && query.source.trim().length > 0 ? query.source.trim() : undefined;
+
+      // P0-6：数据库口令不允许出现在 URL 中（会进入代理/网关/访问日志）。
+      if (query.password !== undefined && query.password !== '') {
+        reply.code(400);
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message:
+              '不允许在 URL 中传递数据库口令。请改用 X-DB-Password 请求头，或使用注册表数据源（source）。',
+          },
+          metadata: { timestamp: new Date().toISOString(), requestId: request.id },
+        };
+      }
+      // P0-7：本地文件 / 动态库路径只能来自服务端注册表
+      if (!source && (query.filePath !== undefined || query.oracleClientPath !== undefined)) {
+        reply.code(400);
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message:
+              '客户端不允许指定 filePath / oracleClientPath。请使用注册表数据源（source）。',
+          },
+          metadata: { timestamp: new Date().toISOString(), requestId: request.id },
+        };
+      }
 
       const { adhocEnabled, adhocTargetAllowlist } = resolveAdhocPolicy(registry, securityEnv);
       const apiKey = (request as { apiKey?: string }).apiKey;
@@ -540,7 +583,8 @@ export async function setupMcpSseRoutes(
     }
 
     const transport = sseTransports.get(sessionId);
-    if (!transport) {
+    // P0-4：会话不存在 / 不属于当前 API key → 统一 404，避免跨 key 劫持 SSE 会话
+    if (!transport || !isMcpSessionOwnedBy(sessionId, requestAuditCtx(request))) {
       return reply.code(404).send({
         success: false,
         error: {
@@ -604,6 +648,13 @@ export async function setupMcpSseRoutes(
       const body = request.body;
 
       try {
+        // P0-4：携带 mcp-session-id 时先校验归属；不匹配按「无有效会话」处理（不泄露存在性）
+        const existingSessionId = headers['mcp-session-id'] as string | undefined;
+        if (existingSessionId && !isMcpSessionOwnedBy(existingSessionId, ctx)) {
+          reply.code(400);
+          return aclJsonRpcError('INVALID_REQUEST', 'Bad Request: No valid session ID provided');
+        }
+
         // 检查是否有现有会话
         const sessionId = headers['mcp-session-id'] as string;
         let transport: StreamableHTTPServerTransport;
@@ -637,6 +688,18 @@ export async function setupMcpSseRoutes(
           typeof headers['x-db-source'] === 'string' && headers['x-db-source'].trim().length > 0
             ? headers['x-db-source'].trim()
             : undefined;
+
+        // P0-7：本地文件 / 动态库路径只能来自服务端注册表
+        if (
+          !sourceHeader &&
+          (headers['x-db-filepath'] !== undefined || headers['x-db-oracle-client-path'] !== undefined)
+        ) {
+          reply.code(400);
+          return aclJsonRpcError(
+            'INVALID_REQUEST',
+            '客户端不允许指定 filePath / oracleClientPath。请使用 X-DB-Source 注册表数据源。'
+          );
+        }
         const hostHeader = headers['x-db-host'] as string;
         const portHeader = headers['x-db-port'] as string;
         const adhocTarget =
@@ -774,7 +837,8 @@ export async function setupMcpSseRoutes(
   fastify.get('/mcp', async (request: FastifyRequest, reply: FastifyReply) => {
     const sessionId = request.headers['mcp-session-id'] as string;
 
-    if (!sessionId || !streamableTransports.has(sessionId)) {
+    // P0-4：不属于当前 API key 的会话按无效会话处理
+    if (!sessionId || !streamableTransports.has(sessionId) || !isMcpSessionOwnedBy(sessionId, requestAuditCtx(request))) {
       return reply.code(400).send({
         jsonrpc: '2.0',
         error: {
@@ -804,6 +868,17 @@ export async function setupMcpSseRoutes(
         error: {
           code: 'MISSING_SESSION_ID',
           message: 'Session ID is required',
+        },
+      });
+    }
+
+    // P0-4：只允许创建者关闭自己的会话
+    if (!isMcpSessionOwnedBy(sessionId, requestAuditCtx(request))) {
+      return reply.code(404).send({
+        success: false,
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Session not found or expired',
         },
       });
     }

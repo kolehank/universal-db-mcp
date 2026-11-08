@@ -53,6 +53,8 @@ export class DMAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    /** 只读配置：连接后尝试开启只读事务（达梦若不支持则由 SQL 文本校验兜底） */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -61,6 +63,7 @@ export class DMAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }
@@ -128,6 +131,19 @@ export class DMAdapter implements DbAdapter {
 
       // 测试连接
       await this.connection.execute('SELECT 1 FROM DUAL', []);
+
+      // 只读配置：尝试开启只读事务（数据库侧强制）。达梦各版本语法支持不一致，
+      // 失败时保留 SQL 文本校验作为兜底，不影响连接建立。
+      if (this.config.readOnly) {
+        try {
+          await this.connection.execute('SET TRANSACTION READ ONLY', []);
+        } catch (error) {
+          console.error(
+            '⚠️ 达梦只读事务设置失败，已回退到 SQL 文本校验:',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
       this.startHeartbeat();
     } catch (error: any) {
       // 翻译常见错误

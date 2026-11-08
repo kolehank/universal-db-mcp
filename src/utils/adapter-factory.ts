@@ -4,6 +4,7 @@
  */
 
 import type { DbAdapter, DbConfig } from '../types/adapter.js';
+import { isReadOnlyConfig, resolvePermissions } from './safety.js';
 import { MySQLAdapter } from '../adapters/mysql.js';
 import { PostgreSQLAdapter } from '../adapters/postgres.js';
 import { RedisAdapter } from '../adapters/redis.js';
@@ -119,6 +120,9 @@ export function createAdapter(config: DbConfig): DbAdapter {
   // Normalize type
   const dbType = normalizeDbType(config.type);
 
+  // 只读配置 → 适配器建立会话级只读（数据库侧强制，不依赖 SQL 文本校验）
+  const readOnly = isReadOnlyConfig(config);
+
   // Create adapter based on type
   switch (dbType) {
     case 'mysql':
@@ -128,6 +132,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'postgres':
@@ -137,6 +142,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'redis':
@@ -145,6 +151,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         port: config.port!,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'oracle':
@@ -155,6 +162,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         password: config.password,
         database: config.database,
         oracleClientPath: config.oracleClientPath,
+        readOnly,
       });
 
     case 'dm':
@@ -164,6 +172,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'sqlserver':
@@ -173,6 +182,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'mongodb':
@@ -183,12 +193,15 @@ export function createAdapter(config: DbConfig): DbAdapter {
         password: config.password,
         database: config.database,
         authSource: (config as any).authSource,
+        // MongoDB 没有会话级只读，改为按操作类型在适配器内强制权限（P0-3）
+        permissions: resolvePermissions(config),
       });
 
     case 'sqlite':
       return new SQLiteAdapter({
         filePath: config.filePath!,
-        readonly: !config.allowWrite,
+        // 只读配置用文件级只读打开；readwrite/full 才允许写
+        readonly: readOnly,
       });
 
     case 'kingbase':
@@ -198,6 +211,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'gaussdb':
@@ -207,6 +221,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'oceanbase':
@@ -216,6 +231,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'tidb':
@@ -225,6 +241,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'clickhouse':
@@ -234,6 +251,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'polardb':
@@ -243,6 +261,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'vastbase':
@@ -252,6 +271,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'highgo':
@@ -261,6 +281,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     case 'goldendb':
@@ -270,6 +291,7 @@ export function createAdapter(config: DbConfig): DbAdapter {
         user: config.user,
         password: config.password,
         database: config.database,
+        readOnly,
       });
 
     default:

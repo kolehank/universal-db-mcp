@@ -34,7 +34,10 @@ describe('HTTP API Integration Tests', () => {
   };
 
   beforeAll(async () => {
-    server = await createHttpServer(testConfig);
+    // legacy（无注册表）模式：必须显式开启 adhoc，否则 createHttpServer 会 fail-closed 拒绝启动
+    server = await createHttpServer(testConfig, {
+      securityEnv: { allowAdhocConnections: true },
+    });
     await server.listen({ port: testConfig.http!.port, host: testConfig.http!.host });
   });
 
@@ -107,7 +110,7 @@ describe('HTTP API Integration Tests', () => {
       expect(body.error.code).toBe('FORBIDDEN');
     });
 
-    it('should accept requests with valid API key (registry-less mode: adhoc denied without source)', async () => {
+    it('should reject client-supplied SQLite filePath (P0-7)', async () => {
       const response = await server.inject({
         method: 'POST',
         url: '/api/connect',
@@ -120,13 +123,13 @@ describe('HTTP API Integration Tests', () => {
         }
       });
 
-      // P1 fail-closed：无 DATASOURCE_CONFIG 且未开 ALLOW_ADHOC_CONNECTIONS 时，无 source 的
-      // adhoc 连接请求 → 403 ADHOC_DISABLED（不再 [200,500]）。
-      // 鉴权通过（带 source）的 200 场景由 acl-http.test.ts 覆盖。
-      expect(response.statusCode).toBe(403);
+      // P0-7：SQLite 文件路径只能由服务端注册表/启动参数指定，客户端提交 → 400。
+      // （鉴权已通过：返回 400 而不是 401/403）
+      expect(response.statusCode).toBe(400);
       const body = JSON.parse(response.body);
       expect(body.success).toBe(false);
-      expect(body.error.code).toBe('ADHOC_DISABLED');
+      expect(body.error.code).toBe('INVALID_REQUEST');
+      expect(body.error.message).toContain('filePath');
     });
   });
 

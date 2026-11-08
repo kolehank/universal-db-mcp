@@ -7,6 +7,7 @@
  */
 
 import { Redis } from 'ioredis';
+import { decideRedisCommand } from '../utils/redis-command-policy.js';
 import type {
   DbAdapter,
   QueryResult,
@@ -22,6 +23,8 @@ export class RedisAdapter implements DbAdapter {
     port: number;
     password?: string;
     database?: string;
+    /** 只读配置：仅允许纯读命令（命令级兜底，主校验在 DatabaseService/safety） */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -29,6 +32,7 @@ export class RedisAdapter implements DbAdapter {
     port: number;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }
@@ -87,6 +91,14 @@ export class RedisAdapter implements DbAdapter {
     const startTime = Date.now();
 
     try {
+      // 只读模式：适配器层再做一次命令白名单校验（主校验在 safety.ts）
+      if (this.config.readOnly) {
+        const decision = decideRedisCommand(query, ['read']);
+        if (!decision.allowed) {
+          throw new Error(decision.reason ?? '只读模式不允许该 Redis 命令');
+        }
+      }
+
       // 解析命令和参数
       const parts = query.trim().split(/\s+/);
       const command = parts[0].toLowerCase();

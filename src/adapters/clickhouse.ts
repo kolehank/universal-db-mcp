@@ -23,6 +23,8 @@ export class ClickHouseAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    /** 只读配置：查询时以 readonly=1 执行（数据库侧强制只读） */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -31,6 +33,7 @@ export class ClickHouseAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }
@@ -82,6 +85,8 @@ export class ClickHouseAdapter implements DbAdapter {
         query,
         query_params: params ? this.convertParams(params) : undefined,
         format: 'JSONEachRow',
+        // 只读配置：服务端强制 readonly=1，DDL/DML 与 SET 均会被拒绝
+        ...(this.config.readOnly ? { clickhouse_settings: { readonly: '1' } } : {}),
       });
 
       const data = await result.json();

@@ -27,6 +27,11 @@ export class SQLServerAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    /**
+     * 只读配置。SQL Server 没有会话级只读开关，写操作由 SQL 文本校验（safety.ts）
+     * 与数据库账号权限双重约束；保留该字段用于状态展示与后续扩展。
+     */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -35,6 +40,7 @@ export class SQLServerAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }

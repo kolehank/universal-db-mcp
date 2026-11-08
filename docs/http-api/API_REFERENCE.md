@@ -12,7 +12,7 @@ Universal Database MCP Server HTTP API provides RESTful endpoints and MCP protoc
 
 All endpoints (except `/api/health` and `/api/info`) require API key authentication, including REST API and MCP SSE/Streamable HTTP endpoints.
 
-> **Note**: If `API_KEYS` environment variable is not configured, authentication is skipped (development mode, legacy mode only).
+> **Note**: Since 3.0.1 there is no "skip authentication when `API_KEYS` is unset" development mode. Without a registry, both `API_KEYS` and `ALLOW_ADHOC_CONNECTIONS=true` are required or the server refuses to start; requests without a valid API key are always rejected.
 
 > **3.0+ (registry mode)**: When `DATASOURCE_CONFIG` is set, API keys come from the server-side registry's `apiKeys[]`. Authentication is **mandatory** (even if `API_KEYS` is empty), and `API_KEYS` is ignored.
 

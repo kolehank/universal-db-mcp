@@ -24,12 +24,16 @@ const { Pool } = pg;
 
 export class KingbaseAdapter implements DbAdapter {
   private pool: pg.Pool | null = null;
+  /** 已设置过只读会话的物理连接（避免每次查询重复 SET） */
+  private readonly roPrepared = new WeakSet<object>();
   private config: {
     host: string;
     port: number;
     user?: string;
     password?: string;
     database?: string;
+    /** 只读配置：会话级强制只读（default_transaction_read_only=on） */
+    readOnly?: boolean;
   };
 
   constructor(config: {
@@ -38,6 +42,7 @@ export class KingbaseAdapter implements DbAdapter {
     user?: string;
     password?: string;
     database?: string;
+    readOnly?: boolean;
   }) {
     this.config = config;
   }
@@ -112,7 +117,7 @@ export class KingbaseAdapter implements DbAdapter {
     const startTime = Date.now();
 
     try {
-      const result = await this.withRetry(() => this.pool!.query(query, params));
+      const result = await this.withRetry(() => this.queryWithReadOnlyGuard(query, params));
       const executionTime = Date.now() - startTime;
 
       return {
@@ -131,6 +136,23 @@ export class KingbaseAdapter implements DbAdapter {
       throw new Error(
         `查询执行失败: ${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  }
+
+  /**
+   * 只读配置下，每个物理连接首次使用时设置 default_transaction_read_only=on。
+   * 这是数据库侧强制（即使 SQL 文本校验被绕过也无法写入），随后再执行用户查询。
+   */
+  private async queryWithReadOnlyGuard(query: string, params?: unknown[]): Promise<pg.QueryResult> {
+    const client = await this.pool!.connect();
+    try {
+      if (this.config.readOnly && !this.roPrepared.has(client)) {
+        await client.query('SET default_transaction_read_only = on');
+        this.roPrepared.add(client);
+      }
+      return await client.query(query, params);
+    } finally {
+      client.release();
     }
   }
 
